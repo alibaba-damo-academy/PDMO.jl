@@ -6,9 +6,9 @@ deps/deps.jl
 deps/builds.log
 deps/downloads/
 
-# Keep Manifest.toml files for reproducible builds and documentation
-# Root Manifest.toml: commit for reproducible CI and development
-# docs/Manifest.toml: commit for reproducible documentation builds
+# Keep docs Manifest.toml for reproducible documentation builds
+Manifest.toml
+!docs/Manifest.toml
 
 # Documentation builds
 docs/build/

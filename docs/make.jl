@@ -56,8 +56,8 @@ makedocs(
     ]
 )
 
-# Comment out deploydocs for local development
-# deploydocs(
-#     repo = "github.com/username/PDMO.jl.git",
-#     push_preview = true
-# ) 
+deploydocs(
+    repo = "github.com/alibaba-damo-academy/PDMO.jl.git",
+    devbranch = "main",
+    push_preview = true
+)
