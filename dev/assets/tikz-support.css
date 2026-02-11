@@ -1,0 +1,37 @@
+/* TikZ Support Styles for Documenter.jl */
+
+/* Center TikZ graphics */
+.tikz-container {
+    text-align: center;
+    margin: 1em 0;
+}
+
+/* Style TikZ SVG elements */
+.tikz-picture {
+    max-width: 100%;
+    height: auto;
+    margin: 0 auto;
+    display: block;
+}
+
+/* Ensure good quality for TikZ graphics */
+.tikz-picture svg {
+    shape-rendering: geometricPrecision;
+    text-rendering: optimizeLegibility;
+}
+
+/* Responsive behavior for TikZ graphics */
+@media (max-width: 768px) {
+    .tikz-picture {
+        max-width: 95%;
+    }
+}
+
+/* Style for TikZ examples in code blocks */
+.example-tikz {
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 1em;
+    margin: 1em 0;
+    background-color: #fafafa;
+} 
