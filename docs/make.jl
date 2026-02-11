@@ -21,11 +21,12 @@ end
 # Build documentation with automatic docstring extraction
 makedocs(
     sitename = "PDMO.jl Documentation",
-    authors = "Kaizhao Sun and contributors",
-    remotes = nothing,  # Disable remote source links for local development
+    authors = "PDMO contributors",
+    repo = Documenter.Remotes.GitHub("alibaba-damo-academy", "PDMO.jl"),
     format = Documenter.HTML(
         prettyurls = get(ENV, "CI", "false") == "true",
         canonical = "https://pdmo.readthedocs.io/en/latest/",
+        repolink = "https://github.com/alibaba-damo-academy/PDMO.jl",
         assets = ["assets/tikz-support.css"]
     ),
     pages = [
@@ -41,7 +42,6 @@ makedocs(
             "Fused Lasso" => "S3_examples/FusedLasso.md",
             "Dual Lasso" => "S3_examples/DualLasso.md",
             "Dual SVM" => "S3_examples/DualSVM.md",
-            "Distributed OPF" => "S3_examples/DistributedOPF.md"
         ],
         "API Reference" => [
             "Main Algorithm Interface" => "S4_api/main.md"

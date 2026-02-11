@@ -13,25 +13,29 @@ state-of-the-art solvers.
 
 ```math 
 \begin{aligned}
-\min_{\mathbf{x}} \quad & F(\mathbf{x}) + \sum_{j=1}^n \left( f_j(x_j) + g_j(x_j) \right)\\ 
+\min_{\mathbf{x}} \quad & F(\mathbf{x}) +  \sum_{j=1}^n \left( f_j(x_j) + g_j(x_j) \right)\\ 
 \mathrm{s.t.} \quad  & \mathbf{A} \mathbf{x} = \mathbf{b},
 \end{aligned}
 ```
 where we have the following problem variables and data:
 
-| **$n$ Block Variables** | **$m$ Block Constraints** | **Block Matrix of $m\times n$ Linear Operators** |
-|:---:|:---:|:---:|
-| $\mathbf{x} = \begin{bmatrix} x_1 \\ x_2 \\ \vdots \\ x_n \end{bmatrix}$ | $\mathbf{b} = \begin{bmatrix} b_1 \\ b_2 \\ \vdots \\ b_m \end{bmatrix}$ | $\mathbf{A} = \begin{bmatrix} \mathbf{A}_{1,1} & \mathbf{A}_{1,2} & \cdots & \mathbf{A}_{1,n} \\ \mathbf{A}_{2,1} & \mathbf{A}_{2,2} & \cdots & \mathbf{A}_{2,n} \\ \vdots & \vdots &  & \vdots \\ \mathbf{A}_{m,1} & \mathbf{A}_{m,2} & \cdots & \mathbf{A}_{m,n} \end{bmatrix}$ |
+```math
+\begin{array}{ccc}
+n~\textbf{Block Variables} \quad & m~\textbf{ Block Constraints} \quad & \textbf{Block Matrix}~ (m \times n ~ \textbf{linear operators}) \\
+\mathbf{x} = \begin{bmatrix} x_1 \\ x_2 \\ \vdots \\ x_n \end{bmatrix} \quad & \mathbf{b} = \begin{bmatrix} b_1 \\ b_2 \\ \vdots \\ b_m \end{bmatrix} \quad & \mathbf{A} = \begin{bmatrix} \mathbf{A}_{1,1} & \mathbf{A}_{1,2} & \cdots & \mathbf{A}_{1,n} \\ \mathbf{A}_{2,1} & \mathbf{A}_{2,2} & \cdots & \mathbf{A}_{2,n} \\ \vdots & \vdots & \ddots & \vdots \\ \mathbf{A}_{m,1} & \mathbf{A}_{m,2} & \cdots & \mathbf{A}_{m,n} \end{bmatrix} \\
+\end{array}
+```
 
 More specifically, 
 - For each $j\in \{1,\cdots,n\}$, a `BlockVariable` $x_j$ represents a numeric array (i.e., scalar, vector, matrix, etc.), and is associated with two objective functions: 
     - each $f_j$ is differentiable, and $f_j(\cdot)$ and $\nabla f_j(\cdot)$ are available; 
     - each $g_j$ is proximable, and $g_j(\cdot)$ and $\text{prox}_{\gamma g_j}(\cdot)$ are available.
-- For each $i \in \{1,\cdots,m\}$, a `BlockConstraint` is defined by $\mathbf{A}_{i,1},\cdots, \mathbf{A}_{i,n}$, and $b_i$: 
+- For each $i \in \{1,\cdots,m\}$, a `BlockConstraint` is defined by some linear operators and a right-hand side array: 
     - the linear operator $\mathbf{A}_{i,j}$ is **non-zero** if and only if constraint $i$ involves blocks $x_j$;
+    - the adjoint operator of $\mathbf{A}_{i,j}$ is available;
     - the right-hand side $b_i$ can be a numeric array of any shape. 
-- Additionally, there might exist a smooth function $F$ that couples all `BlockVariable`s:
-    - we assume that $F(\cdot)$, $\nabla F(\cdot)$, and $\nabla_j F(\cdot)$'s for $j\in \{1,\cdots, n\}$ are available;  
+- Additionally, there might exist a smooth function $F$ that couples all BlockVariables:
+    - we assume that $F(\cdot)$, $\nabla F(\cdot)$,  and $\nabla_j F(\cdot)$'s for $j\in \{1,\cdots, n\}$ are available.
 
 ### Algorithms
 
