@@ -31,6 +31,15 @@ For ADMM decomposition, this is reformulated as a two-block problem:
 
 This reformulation separates the equality constraint from the box constraints, enabling efficient distributed solving using bipartite ADMM.
 
+## Solver References
+
+### [JuMP](https://github.com/jump-dev/JuMP.jl) Solvers
+- **[SCS](https://github.com/cvxgrp/scs)**: Splitting Conic Solver
+- **[COSMO.jl](https://github.com/oxfordcontrol/COSMO.jl)**: Conic Operator Splitting Method  
+- **[Clarabel.jl](https://github.com/oxfordcontrol/Clarabel.jl)**: Interior Point Conic Solver
+- **[MadNLP.jl](https://github.com/MadNLP/MadNLP.jl)**: Nonlinear Programming Solver
+- **[Ipopt](https://github.com/coin-or/Ipopt)**: Interior Point Optimizer
+
 ## Implementation Examples
 
 ### JuMP Implementation
@@ -122,7 +131,14 @@ result = runBipartiteADMM(mbp, param)
 
 ## Benchmark Methodology
 
-The benchmark compares multiple ADMM solution approaches:
+The benchmark compares multiple solution approaches:
+
+### JuMP Solvers
+- **SCS**: Splitting Conic Solver
+- **COSMO**: Conic Operator Splitting Method  
+- **Clarabel**: Interior Point Conic Solver
+- **MadNLP**: Nonlinear Programming Solver
+- **Ipopt**: Interior Point Optimizer
 
 ### ADMM Variants
 - **Original ADMM**: Basic consensus ADMM with no acceleration
@@ -142,44 +158,74 @@ Three different problem sizes are tested:
 
 ### Small Scale (n = 500)
 
+**JuMP Solver Performance:**
+
+| Solver | Time (s) | Objective | Status |
+|--------|----------|-----------|---------|
+| COSMO | 0.0407 | -2.0304 | OPTIMAL |
+| SCS | 0.0975 | -2.0304 | OPTIMAL |
+| Clarabel | 0.1939 | -2.0304 | OPTIMAL |
+| Ipopt | 0.2473 | -2.0305 | LOCALLY_SOLVED |
+| MadNLP | 8.9777 | -2.0305 | LOCALLY_SOLVED |
+
 **ADMM Performance (Top 5):**
 
-| Method | Time (s) | Iterations | Status |
-|--------|----------|------------|---------|
-| Doubly Linearized (baseline) | 1.35 | 879 | OPTIMAL |
-| Adaptive Linearized (γ=1.0, r=1000) | 1.45 | 2753 | OPTIMAL |
-| Adaptive Linearized Simple (γ=1.0, r=1000) | 1.58 | 2625 | OPTIMAL |
-| Adaptive Linearized (γ=2.0, r=1000) | 1.60 | 3030 | OPTIMAL |
-| Adaptive Linearized (γ=0.5, r=1000) | 1.78 | 2756 | OPTIMAL |
+| Method | Time (s) | Speedup | Iterations | Status |
+|--------|----------|---------|------------|---------|
+| Doubly Linearized (baseline) | 1.35 | **6.67x** | 879 | OPTIMAL |
+| Adaptive Linearized (γ=1.0, r=1000) | 1.45 | 6.20x | 2753 | OPTIMAL |
+| Adaptive Linearized Simple (γ=1.0, r=1000) | 1.58 | 5.68x | 2625 | OPTIMAL |
+| Adaptive Linearized (γ=2.0, r=1000) | 1.60 | 5.63x | 3030 | OPTIMAL |
+| Adaptive Linearized (γ=0.5, r=1000) | 1.78 | 5.03x | 2756 | OPTIMAL |
 
 ### Medium Scale (n = 1000)
 
+**JuMP Solver Performance:**
+
+| Solver | Time (s) | Objective | Status |
+|--------|----------|-----------|---------|
+| SCS | 0.2463 | -2.1057 | OPTIMAL |
+| Ipopt | 0.5411 | -2.1057 | LOCALLY_SOLVED |
+| COSMO | 0.6065 | -2.1057 | OPTIMAL |
+| Clarabel | 1.5996 | -2.1057 | OPTIMAL |
+| MadNLP | 3.8568 | -2.1057 | LOCALLY_SOLVED |
+
 **ADMM Performance (Top 5):**
 
-| Method | Time (s) | Iterations | Status |
-|--------|----------|------------|---------|
-| Doubly Linearized (baseline) | 5.86 | 1357 | OPTIMAL |
-| Original ADMM + SRA Adapter | 15.76 | 61 | OPTIMAL |
-| Original ADMM + SRA + Halpern | 15.84 | 61 | OPTIMAL |
-| Adaptive Linearized (γ=0.5, r=1000) | 17.95 | 9568 | OPTIMAL |
-| Adaptive Linearized Simple (γ=1.0, r=1000) | 18.38 | 10030 | OPTIMAL |
+| Method | Time (s) | Speedup | Iterations | Status |
+|--------|----------|---------|------------|---------|
+| Doubly Linearized (baseline) | 5.86 | **0.66x** | 1357 | OPTIMAL |
+| Original ADMM + SRA Adapter | 15.76 | 0.24x | 61 | OPTIMAL |
+| Original ADMM + SRA + Halpern | 15.84 | 0.24x | 61 | OPTIMAL |
+| Adaptive Linearized (γ=0.5, r=1000) | 17.95 | 0.21x | 9568 | OPTIMAL |
+| Adaptive Linearized Simple (γ=1.0, r=1000) | 18.38 | 0.21x | 10030 | OPTIMAL |
 
 ### Large Scale (n = 4000)
 
+**JuMP Solver Performance:**
+
+| Solver | Time (s) | Objective | Status |
+|--------|----------|-----------|---------|
+| SCS | 12.1316 | -2.2632 | OPTIMAL |
+| COSMO | 38.3884 | -2.2632 | OPTIMAL |
+| Clarabel | 156.3004 | -2.2632 | OPTIMAL |
+| MadNLP | 258.7855 | -2.2632 | LOCALLY_SOLVED |
+| Ipopt | 306.6743 | -2.2633 | LOCALLY_SOLVED |
+
 **ADMM Performance (Top 5):**
 
-| Method | Time (s) | Iterations | Status |
-|--------|----------|------------|---------|
-| Doubly Linearized (baseline) | 285.60 | 3348 | OPTIMAL |
-| Original ADMM + SRA Adapter | 1034.30 | 69 | OPTIMAL |
-| Original ADMM + SRA + Halpern | 1050.25 | 69 | OPTIMAL |
-| Adaptive Linearized Simple (γ=1.0, r=1000) | 3600.01 | 98037 | TIME_LIMIT |
-| Adaptive Linearized (γ=2.0, r=1000) | 3600.01 | 96944 | TIME_LIMIT |
+| Method | Time (s) | Speedup | Iterations | Status |
+|--------|----------|---------|------------|---------|
+| Doubly Linearized (baseline) | 285.60 | **1.07x** | 3348 | OPTIMAL |
+| Original ADMM + SRA Adapter | 1034.30 | 0.30x | 69 | OPTIMAL |
+| Original ADMM + SRA + Halpern | 1050.25 | 0.29x | 69 | OPTIMAL |
+| Adaptive Linearized Simple (γ=1.0, r=1000) | 3600.01 | 0.09x | 98037 | TIME_LIMIT |
+| Adaptive Linearized (γ=2.0, r=1000) | 3600.01 | 0.09x | 96944 | TIME_LIMIT |
 
 ## Multi-Scale Performance Summary
 
-| Scale | Best ADMM Method | Time (s) | Iterations | Status |
-|-------|------------------|----------|------------|---------|
-| Small (n=500) | Doubly Linearized (baseline) | 1.35 | 879 | OPTIMAL |
-| Medium (n=1000) | Doubly Linearized (baseline) | 5.86 | 1357 | OPTIMAL |
-| Large (n=4000) | Doubly Linearized (baseline) | 285.60 | 3348 | OPTIMAL |
+| Scale | JuMP Reference | Best ADMM Method | ADMM Time | Speedup | Status |
+|-------|----------------|------------------|-----------|---------|---------|
+| Small (n=500) | MadNLP: 8.98s | Doubly Linearized (baseline) | 1.35s | 6.67x | OPTIMAL |
+| Medium (n=1000) | SCS: 0.25s | Doubly Linearized (baseline) | 5.86s | 0.66x | OPTIMAL |
+| Large (n=4000) | SCS: 12.13s | Doubly Linearized (baseline) | 285.60s | 1.07x | OPTIMAL |

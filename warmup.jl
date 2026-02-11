@@ -1,6 +1,5 @@
 import Pkg
-Pkg.activate(".")
-
+Pkg.activate(@__DIR__)
 """
 PDMO.jl Setup
 =============
@@ -31,12 +30,18 @@ Simply run: julia warmup.jl (no modifications needed)
 # =============================================================================
 # HSL SETUP SECTION - Uncomment and modify path if you have HSL
 # =============================================================================
+REMOTE_TEST = true
 
-# Default: Use placeholder (no HSL)
-HSL_PATH = "HSL_jll_placeholder"
+if REMOTE_TEST == false
+    # For local development
+    HSL_PATH = joinpath(@__DIR__, "HSL_jll_placeholder")
+else
+    # For remote test, the script should be run from the dir where PDMO.jl is located
+    HSL_PATH = "PDMO.jl/HSL_jll_placeholder"
+end
 
 # If you have HSL: Uncomment and update the path below
-# HSL_PATH = "/PATH/TO/HSL_jll"
+# HSL_PATH = "full/path/to/HSL_jll"
 
 # =============================================================================
 

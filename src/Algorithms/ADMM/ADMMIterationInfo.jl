@@ -68,10 +68,10 @@ mutable struct ADMMIterationInfo
     dualBuffer::Dict{String, NumericVariable}
 
     # termination info
+    partitionAlgorithmTime::Float64
     stopIter::Int64
     totalTime::Float64
     terminationStatus::ADMMTerminationStatus
-    
     """
         ADMMIterationInfo()
 
@@ -91,7 +91,7 @@ mutable struct ADMMIterationInfo
         Dict{String, NumericVariable}(),
         Dict{String, NumericVariable}(), 
         Dict{String, NumericVariable}(),
-        -1, 0.0,
+        Inf, -1, 0.0,
         ADMM_TERMINATION_UNSPECIFIED)
 end 
 
@@ -182,9 +182,17 @@ function updatePrimalResidualsInBuffer!(info::ADMMIterationInfo, admmGraph::ADMM
     rho = info.rhoHistory[end][1]
     addToBuffer = true 
 
-    presL2Square = 0.0 
-    presLInf = 0.0 
+    # Thread-local reductions (the loop below runs in parallel).
+    #
+    # IMPORTANT (Julia >= 1.9 threadpools):
+    # `Threads.threadid()` can be larger than `Threads.nthreads()` (default pool size),
+    # e.g. when an interactive threadpool exists. Allocate by `Threads.maxthreadid()`
+    # to avoid BoundsError on machines where `threadid()` reaches `nthreads()+1`.
+    nT = Threads.maxthreadid()
+    presL2SquareByThread = zeros(Float64, nT)
+    presLInfByThread = fill(0.0, nT)
     @threads for idx in 1:numberEdges
+        tid = Threads.threadid()
         edgeID = edges[idx]
         nodeID1 = admmGraph.edges[edgeID].nodeID1
         nodeID2 = admmGraph.edges[edgeID].nodeID2
@@ -193,12 +201,17 @@ function updatePrimalResidualsInBuffer!(info::ADMMIterationInfo, admmGraph::ADMM
         admmGraph.edges[edgeID].mappings[nodeID1](info.primalSol[nodeID1], info.dualBuffer[edgeID], addToBuffer)
         admmGraph.edges[edgeID].mappings[nodeID2](info.primalSol[nodeID2], info.dualBuffer[edgeID], addToBuffer)
 
-        presL2Square += dot(info.dualBuffer[edgeID], info.dualBuffer[edgeID])
-        presLInf = max(presLInf, norm(info.dualBuffer[edgeID], Inf))
+        rnorm2 = dot(info.dualBuffer[edgeID], info.dualBuffer[edgeID])
+        rnormInf = norm(info.dualBuffer[edgeID], Inf)
+        presL2SquareByThread[tid] += rnorm2
+        presLInfByThread[tid] = max(presLInfByThread[tid], rnormInf)
         
         ALTerms[idx] += dot(info.dualSol[edgeID], info.dualBuffer[edgeID])
-        ALTerms[idx] += 0.5 * rho * presL2Square
+        # Augmented Lagrangian penalty term is per-constraint: (ρ/2)||r_e||^2
+        ALTerms[idx] += 0.5 * rho * rnorm2
     end 
+    presL2Square = sum(presL2SquareByThread)
+    presLInf = maximum(presLInfByThread)
 
     push!(info.presL2, sqrt(presL2Square))
     push!(info.presLInf, presLInf)

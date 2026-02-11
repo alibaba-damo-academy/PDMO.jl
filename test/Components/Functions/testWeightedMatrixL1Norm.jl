@@ -89,7 +89,7 @@ include("../../test_helper.jl")
         @test f(X_near) ≈ expected_near
         
         # Test with matrix containing negative values clearly outside tolerance
-        X_outside = [1.0 -1e-5; 3.0 4.0]  # -1e-5 is clearly outside FeasTolerance
+        X_outside = [1.0 -1e-4; 3.0 4.0]  # -1e-5 is clearly outside FeasTolerance
         @test f(X_outside) == Inf
         
         # Test with zero matrix

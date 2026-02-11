@@ -204,6 +204,8 @@ struct NullMapping <: AbstractMapping end
 include("LinearMappingIdentity.jl")
 include("LinearMappingExtraction.jl")
 include("LinearMappingMatrix.jl")
+include("LinearMappingIdentityStacking.jl")
+include("LinearMappingStacking.jl")
 
 """ 
     adjoint(mapping1::AbstractMapping, mapping2::AbstractMapping)

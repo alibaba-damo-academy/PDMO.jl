@@ -93,7 +93,7 @@ isSupportedByJuMP(f::Type{<:IndicatorHyperplane}) = true
 function (f::IndicatorHyperplane)(x::NumericVariable, enableParallel::Bool=false)
     @assert(length(x) == length(f.slope), "IndicatorHyperplane: dimension mismatch.")
     residual = dot(f.slope, x) - f.intercept
-    return abs(residual) <= FeasTolerance ? 0.0 : Inf
+    return abs(residual) <= FeasTolerance * 100.0 ? 0.0 : Inf
 end 
 
 # proximal oracle

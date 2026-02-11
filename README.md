@@ -12,35 +12,31 @@
 
 ```math 
 \begin{aligned}
-\min_{\mathbf{x}} \quad & F(\mathbf{x}) + \sum_{j=1}^n \left( f_j(x_j) + g_j(x_j) \right)\\ 
+\min_{\mathbf{x}} \quad & \sum_{j=1}^n \left( f_j(x_j) + g_j(x_j) \right)\\ 
 \mathrm{s.t.} \quad  & \mathbf{A} \mathbf{x} = \mathbf{b},
 \end{aligned}
 ```
 where we have the following problem variables and data:
 
-```math
-\begin{array}{ccc}
-n~\textbf{Block Variables} \quad & m~\textbf{ Block Constraints} \quad & \textbf{Block Matrix}~ (m \times n ~ \textbf{linear operators}) \\
-\mathbf{x} = \begin{bmatrix} x_1 \\ x_2 \\ \vdots \\ x_n \end{bmatrix} \quad & \mathbf{b} = \begin{bmatrix} b_1 \\ b_2 \\ \vdots \\ b_m \end{bmatrix} \quad & \mathbf{A} = \begin{bmatrix} \mathbf{A}_{1,1} & \mathbf{A}_{1,2} & \cdots & \mathbf{A}_{1,n} \\ \mathbf{A}_{2,1} & \mathbf{A}_{2,2} & \cdots & \mathbf{A}_{2,n} \\ \vdots & \vdots & \ddots & \vdots \\ \mathbf{A}_{m,1} & \mathbf{A}_{m,2} & \cdots & \mathbf{A}_{m,n} \end{bmatrix} \\
-\end{array}
-```
+| **$n$ Block Variables** | **$m$ Block Constraints** | **Block Matrix of $m\times n$ Linear Operators** |
+|:---:|:---:|:---:|
+| $\mathbf{x} = \begin{bmatrix} x_1 \\ x_2 \\ \vdots \\ x_n \end{bmatrix}$ | $\mathbf{b} = \begin{bmatrix} b_1 \\ b_2 \\ \vdots \\ b_m \end{bmatrix}$ | $\mathbf{A} = \begin{bmatrix} \mathbf{A}_{1,1} & \mathbf{A}_{1,2} & \cdots & \mathbf{A}_{1,n} \\ \mathbf{A}_{2,1} & \mathbf{A}_{2,2} & \cdots & \mathbf{A}_{2,n} \\ \vdots & \vdots &  & \vdots \\ \mathbf{A}_{m,1} & \mathbf{A}_{m,2} & \cdots & \mathbf{A}_{m,n} \end{bmatrix}$ |
 
 More specifically, 
 - For each $j\in \{1,\cdots,n\}$, a `BlockVariable` $x_j$ represents a numeric array (i.e., scalar, vector, matrix, etc.), and is associated with two objective functions: 
     - each $f_j$ is differentiable, and $f_j(\cdot)$ and $\nabla f_j(\cdot)$ are available; 
     - each $g_j$ is proximable, and $g_j(\cdot)$ and $\text{prox}_{\gamma g_j}(\cdot)$ are available.
-- For each $i \in \{1,\cdots,m\}$, a `BlockConstraint` is defined by some linear operators and a right-hand side array: 
+- For each $i \in \{1,\cdots,m\}$, a `BlockConstraint` is defined by $\mathbf{A}_{i,1},\cdots, \mathbf{A}_{i,n}$, and $b_i$: 
     - the linear operator $\mathbf{A}_{i,j}$ is **non-zero** if and only if constraint $i$ involves blocks $x_j$;
     - the adjoint operator of $\mathbf{A}_{i,j}$ is available;
     - the right-hand side $b_i$ can be a numeric array of any shape. 
-- Additionally, there might exist a smooth function $F$ that couples all BlockVariables:
-    - we assume that $F(\cdot)$, $\nabla F(\cdot)$,  and $\nabla_j F(\cdot)$'s for $j\in \{1,\cdots, n\}$ are available.
+
 ## Available Algorithms
 
 `PDMO.jl` provides various algorithms to solve problems of the above form.
 
 - **Alternating Direction Method of Multipliers (ADMM)**
-  - Graph-based bipartization methods automatically generate ADMM-ready reformulations of `MultiblockProblem` when $F=0$.
+  - Graph-based bipartization methods automatically generate ADMM-ready reformulations of `MultiblockProblem`.
   - Various ADMM variants are available: 
     - Original ADMM 
     - Doubly linearized ADMM 
@@ -49,20 +45,17 @@ More specifically,
     - Penalty adapters, e.g., Residual Balancing, Spectral Radius Approximation
     - Accelerators, e.g., Halpern (with or without restart), Filtered Anderson
 
-- **Adaptive Primal-Dual Method (AdaPDM)**:
-  - A suite of efficient and adaptive methods for problems with simpler coupling, i.e., $m=1$, $F=f_n = 0$, and $\mathbf{A}_{1, n} = -\mathrm{Id}$. 
-  - Various methods can be selected: 
-    - Original Condat-Vu
-    - AdaPDM 
-    - AdaPDM+
-    - Malitsky-Pock
-    
-- **Block Coordinate Descent (BCD)** 
-  - A suite of classic methods for problems without constraints, i.e., $m=0$. 
-  - Various subproblem solvers can be selected:
-      - Original BCD Subproblem Solver
-      - Proximal BCD Subproblem Solver
-      - Prox-linear BCD Subproblem Solver
+- **Adaptive Primal-Dual Method (AdaPDM)**
+  - A suite of efficient and adaptive methods for problems with simpler coupling.
+  ```math 
+    \begin{aligned}
+    \min_{\mathbf{x}} \quad & \sum_{j=1}^{n-1} \left( f_j(x_j) + g_j(x_j) \right) + g_n(\mathbf{A}_{1,1}x_1 + \cdots + \mathbf{A}_{1,n-1}x_{n-1})
+    \end{aligned}
+  ```
+  - Various methods can be selected : 
+    - Original Condat-Vũ Method (Condat 2013, Vũ 2013)
+    - Adaptive Primal-Dual Method & Plus (Latafat et al. 2024)
+    - Malitsky-Pock Methd (Malitsky and Pock, 2018)
 
 ## Key Features 
 - 🧱 **Unified Modeling**: A versatile interface for structured problems.
@@ -74,23 +67,17 @@ More specifically,
 
 ## Installation
 Before official release, we recommend the following practice to download and use ```PDMO.jl```. 
-Download the package and navigate to the project folder:
-```bash 
-cd PDMO
-```
 
-### HSL Setup (Optional)
+### Project Setup
+Download the project. From where ```PDMO.jl``` is located, run:
+```bash 
+julia PDMO.jl/warmup.jl
+```
 For enhanced performance, you can optionally use linear solvers from [HSL](https://www.hsl.rl.ac.uk):
 
 1. Obtain HSL library from [https://www.hsl.rl.ac.uk/](https://www.hsl.rl.ac.uk/)
 2. Set up your HSL_jll directory structure
-3. Edit `warmup.jl` and update the HSL path
-
-### Project Setup
-Run the setup script:
-```bash 
-julia warmup.jl
-```
+3. Edit `warmup.jl` and update the HSL path before running the above command
 
 This will set up all required dependencies and configure HSL if available.
 
@@ -200,7 +187,7 @@ Upon termination of the selected algorithm, one can look for primal solution and
 ### User Defined Smooth and Proximable Functions
 In addition to a set of built-in functions whose gradient or proximal oracles have been implemented, `PDMO.jl` supports user-defined smooth and proximable functions. Consider the function 
 ```math
-    F(x) = x_1 + |x_2| + x_3^4, ~x = [x_1, x_2, x_3]^\top \in \mathbb{R}^3,
+    F(x) = x_1 + |x_2| + x_3^4, ~x = [x_1, x_2, x_3]^\top \in \R^3,
 ```
 which can be expressed as the sum of a smooth $f$ and a proximable $g$: 
 ```math 
@@ -223,7 +210,7 @@ block.val = zeros(3)                     # initial value
 
 ## Documentation
 
-For comprehensive documentation, examples, and API references, visit our [full documentation](https://alibaba-damo-academy.github.io/PDMO.jl).
+For comprehensive documentation, examples, and API references, visit our [full documentation](docs/src/index.md).
 
 
 ## Roadmap (Work in Progress)

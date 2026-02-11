@@ -120,6 +120,7 @@ mutable struct LinearSolver <: SpecializedOriginalADMMSubproblemSolver
         @assert(length(size(node.val)) == 1, "LinearSolver only supports vector variables")
         @assert(isa(node.g, Zero) || 
                 isa(node.g, IndicatorBox) && all(isinf.(-node.g.lb)) && all(isinf.(node.g.ub),), 
+                isa(node.g, IndicatorSumOfNVariables) && node.g.numberVariables == 2, 
                 "LinearSolver only supports unconstrained nodal domain: $(node.g)")
         @assert(isa(node.f, QuadraticFunction) || 
                 isa(node.f, AffineFunction) || 
@@ -277,7 +278,7 @@ function LinearSolver(nodeID::String,
 
     solver = LinearSolver(nodeID, edgeData, admmGraph, logLevel)
     prepareLinearSolverData!(solver, initialRho)
-    @PDMOInfo logLevel "OriginalADMMSubproblemSolve: ADMM node $nodeID initialized with LinearSolver."
+    @PDMODebug logLevel "OriginalADMMSubproblemSolve: ADMM node $nodeID initialized with LinearSolver."
     return solver
 end
 

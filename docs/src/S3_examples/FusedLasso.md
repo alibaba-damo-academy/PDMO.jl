@@ -32,6 +32,15 @@ For ADMM decomposition, this is reformulated as a two-block problem:
 
 This reformulation enables efficient distributed solving using bipartite ADMM.
 
+## Solver References
+
+### [JuMP](https://github.com/jump-dev/JuMP.jl) Solvers
+- **[SCS](https://github.com/cvxgrp/scs)**: Splitting Conic Solver
+- **[COSMO.jl](https://github.com/oxfordcontrol/COSMO.jl)**: Conic Operator Splitting Method  
+- **[Clarabel.jl](https://github.com/oxfordcontrol/Clarabel.jl)**: Interior Point Conic Solver
+- **[MadNLP.jl](https://github.com/MadNLP/MadNLP.jl)**: Nonlinear Programming Solver
+- **[Ipopt](https://github.com/coin-or/Ipopt)**: Interior Point Optimizer
+
 ## Implementation Examples
 
 ### JuMP Implementation
@@ -127,7 +136,14 @@ result = runBipartiteADMM(mbp, param)
 
 ## Benchmark Methodology
 
-The benchmark compares multiple ADMM solution approaches:
+The benchmark compares multiple solution approaches:
+
+### JuMP Solvers
+- **SCS**: Splitting Conic Solver
+- **COSMO**: Conic Operator Splitting Method  
+- **Clarabel**: Interior Point Conic Solver
+- **MadNLP**: Nonlinear Programming Solver
+- **Ipopt**: Interior Point Optimizer
 
 ### ADMM Variants
 - **Original ADMM**: Basic consensus ADMM with no acceleration
@@ -147,45 +163,75 @@ Three different problem sizes are tested:
 
 ### Small Scale (500 × 250)
 
+**JuMP Solver Performance:**
+
+| Solver | Time (s) | Objective | Status |
+|--------|----------|-----------|---------|
+| SCS | 0.0151 | 205.4149 | OPTIMAL |
+| COSMO | 0.0272 | 205.4147 | OPTIMAL |
+| Clarabel | 0.0265 | 205.4148 | OPTIMAL |
+| Ipopt | 0.1369 | 205.4148 | LOCALLY_SOLVED |
+| MadNLP | 7.8851 | 205.4148 | LOCALLY_SOLVED |
+
 **ADMM Performance (Top 5):**
 
-| Method | Time (s) | Iterations | Status |
-|--------|----------|------------|---------|
-| Original ADMM + RB + Halpern | 0.08 | 856 | OPTIMAL |
-| Original ADMM + RB Adapter | 0.10 | 454 | OPTIMAL |
-| Original ADMM + SRA + Halpern | 0.11 | 63 | OPTIMAL |
-| Original ADMM + SRA Adapter | 0.15 | 63 | OPTIMAL |
-| Original ADMM + Anderson only | 0.23 | 159 | OPTIMAL |
+| Method | Time (s) | Speedup | Iterations | Status |
+|--------|----------|---------|------------|---------|
+| Original ADMM + RB + Halpern | 0.08 | **96.62x** | 856 | OPTIMAL |
+| Original ADMM + RB Adapter | 0.10 | 81.72x | 454 | OPTIMAL |
+| Original ADMM + SRA + Halpern | 0.11 | 69.80x | 63 | OPTIMAL |
+| Original ADMM + SRA Adapter | 0.15 | 52.75x | 63 | OPTIMAL |
+| Original ADMM + Anderson only | 0.23 | 34.21x | 159 | OPTIMAL |
 
 ### Medium Scale (1000 × 500)
 
+**JuMP Solver Performance:**
+
+| Solver | Time (s) | Objective | Status |
+|--------|----------|-----------|---------|
+| SCS | 0.0654 | 394.9359 | OPTIMAL |
+| Ipopt | 0.1214 | 394.9358 | LOCALLY_SOLVED |
+| COSMO | 0.1286 | 394.9358 | OPTIMAL |
+| Clarabel | 0.1522 | 394.9358 | OPTIMAL |
+| MadNLP | 0.4297 | 394.9358 | LOCALLY_SOLVED |
+
 **ADMM Performance (Top 5):**
 
-| Method | Time (s) | Iterations | Status |
-|--------|----------|------------|---------|
-| Original ADMM + Anderson only | 0.13 | 229 | OPTIMAL |
-| Original ADMM (baseline) | 0.13 | 880 | OPTIMAL |
-| Original ADMM + Halpern only | 0.28 | 1707 | OPTIMAL |
-| Original ADMM + RB Adapter | 0.45 | 867 | OPTIMAL |
-| Original ADMM + RB + Halpern | 0.60 | 1681 | OPTIMAL |
+| Method | Time (s) | Speedup | Iterations | Status |
+|--------|----------|---------|------------|---------|
+| Original ADMM + Anderson only | 0.13 | **3.23x** | 229 | OPTIMAL |
+| Original ADMM (baseline) | 0.13 | 3.18x | 880 | OPTIMAL |
+| Original ADMM + Halpern only | 0.28 | 1.54x | 1707 | OPTIMAL |
+| Original ADMM + RB Adapter | 0.45 | 0.96x | 867 | OPTIMAL |
+| Original ADMM + RB + Halpern | 0.60 | 0.72x | 1681 | OPTIMAL |
 
 ### Large Scale (4000 × 2000)
 
+**JuMP Solver Performance:**
+
+| Solver | Time (s) | Objective | Status |
+|--------|----------|-----------|---------|
+| SCS | 2.3063 | 1346.478 | OPTIMAL |
+| Ipopt | 3.0954 | 1346.480 | LOCALLY_SOLVED |
+| COSMO | 4.9331 | 1346.480 | OPTIMAL |
+| Clarabel | 10.3667 | 1346.480 | OPTIMAL |
+| MadNLP | 47.4689 | 1346.480 | LOCALLY_SOLVED |
+
 **ADMM Performance (Top 5):**
 
-| Method | Time (s) | Iterations | Status |
-|--------|----------|------------|---------|
-| Original ADMM + Anderson only | 7.32 | 474 | OPTIMAL |
-| Original ADMM (baseline) | 8.21 | 1949 | OPTIMAL |
-| Original ADMM + Halpern only | 14.97 | 3839 | OPTIMAL |
-| Original ADMM + RB Adapter | 21.57 | 968 | OPTIMAL |
-| Original ADMM + RB + Halpern | 25.05 | 1873 | OPTIMAL |
+| Method | Time (s) | Speedup | Iterations | Status |
+|--------|----------|---------|------------|---------|
+| Original ADMM + Anderson only | 7.32 | **6.49x** | 474 | OPTIMAL |
+| Original ADMM (baseline) | 8.21 | 5.78x | 1949 | OPTIMAL |
+| Original ADMM + Halpern only | 14.97 | 3.17x | 3839 | OPTIMAL |
+| Original ADMM + RB Adapter | 21.57 | 2.20x | 968 | OPTIMAL |
+| Original ADMM + RB + Halpern | 25.05 | 1.89x | 1873 | OPTIMAL |
 
 ## Multi-Scale Performance Summary
 
-| Scale | Best ADMM Method | Time (s) | Iterations | Status |
-|-------|------------------|----------|------------|---------|
-| Small (500×250) | Original ADMM + RB + Halpern | 0.08 | 856 | OPTIMAL |
-| Medium (1000×500) | Original ADMM + Anderson only | 0.13 | 229 | OPTIMAL |
-| Large (4000×2000) | Original ADMM + Anderson only | 7.32 | 474 | OPTIMAL |
+| Scale | JuMP Reference | Best ADMM Method | ADMM Time | Speedup | Status |
+|-------|----------------|------------------|-----------|---------|---------|
+| Small (500×250) | MadNLP: 7.89s | Original ADMM + RB + Halpern | 0.08s | 96.62x | OPTIMAL |
+| Medium (1000×500) | MadNLP: 0.43s | Original ADMM + Anderson only | 0.13s | 3.23x | OPTIMAL |
+| Large (4000×2000) | MadNLP: 47.47s | Original ADMM + Anderson only | 7.32s | 6.49x | OPTIMAL |
 

@@ -109,7 +109,9 @@ The function:
 
 Currently, only LinearMappingMatrix and LinearMappingIdentity are supported for mappings.
 """
-function solveMultiblockProblemByJuMP(mbp::MultiblockProblem, logLevel::Int64=1)
+function solveMultiblockProblemByJuMP(mbp::MultiblockProblem, logLevel::Int64=1; 
+    hasInteger::Bool=false, 
+    silent::Bool=true)
     for constr in mbp.constraints
         for (id, L) in constr.mappings
             @assert(typeof(L) == LinearMappingMatrix || typeof(L) == LinearMappingIdentity, 
@@ -121,12 +123,16 @@ function solveMultiblockProblemByJuMP(mbp::MultiblockProblem, logLevel::Int64=1)
         error("solveMultiblockProblemByJuMP: unsupported type of coupling function = $(typeof(mbp.couplingFunction))")
     end 
 
-    model = JuMP.Model(Ipopt.Optimizer)
-    JuMP.set_silent(model)
-    if HSL_FOUND 
+    model = hasInteger ? JuMP.Model(HiGHS.Optimizer) : JuMP.Model(Ipopt.Optimizer)
+    
+    if hasInteger == false && HSL_FOUND 
         JuMP.set_attribute(model, "hsllib", HSL_jll.libhsl_path)
         JuMP.set_attribute(model, "linear_solver", "ma27")
     end 
+
+    if silent
+        JuMP.set_silent(model)
+    end
 
     var = Dict{BlockID, Vector{JuMP.VariableRef}}() 
     objExpressions = Vector{Union{JuMP.AffExpr, JuMP.QuadExpr}}()

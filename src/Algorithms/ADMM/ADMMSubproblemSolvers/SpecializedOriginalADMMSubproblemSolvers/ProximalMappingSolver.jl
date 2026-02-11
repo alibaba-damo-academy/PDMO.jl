@@ -1,4 +1,4 @@
-"""
+                                                                                                           """
     ProximalMappingSolver <: SpecializedOriginalADMMSubproblemSolver
 
 Specialized solver for ADMM subproblems that reduce to proximal mappings.
@@ -155,8 +155,16 @@ mutable struct ProximalMappingSolver <: SpecializedOriginalADMMSubproblemSolver
             return true
         end
         
+        # IMPORTANT:
+        # Use dense buffers here regardless of `node.val` storage (which can be sparse),
+        # because we only estimate/validate the common scaling coefficient of identity-type mappings.
+        # Using sparse vectors here can keep a fixed sparsity pattern and break slice writes.
+        # initialValue = fill(1.0, size(node.val))
+        #s caledValue = zeros(Float64, size(node.val))
+
+        # seems OK here with sparse vectors
         initialValue = similar(node.val)
-        initialValue .= 1.0 
+        initialValue .= 1.0
         scaledValue = zero(node.val)
 
         for edgeID in node.neighbors
@@ -165,7 +173,20 @@ mutable struct ProximalMappingSolver <: SpecializedOriginalADMMSubproblemSolver
                     isa(mapping, LinearMappingExtraction) || 
                     isa(mapping, LinearMappingMatrix) && isIdentityTypeMapping(mapping.A), 
                     "ProximalMappingSolver: only supports identity-type mappings.")
-            mapping(initialValue, scaledValue, true)
+            if isa(mapping, LinearMappingExtraction)
+                # Extraction reduces the first dimension. Compute into a correctly-sized buffer
+                # and then add it back into the corresponding slice of `scaledValue`.
+                expectedShape = (mapping.indexEnd - mapping.indexStart + 1, Base.tail(size(initialValue))...)
+                ret = zeros(Float64, expectedShape)
+                mapping(initialValue, ret, false)
+                slice = (mapping.indexStart:mapping.indexEnd, ntuple(_ -> Colon(), ndims(initialValue) - 1)...)
+                scaledValue[slice...] .+= ret
+            elseif isa(mapping, LinearMappingMatrix)
+                mapping(initialValue, scaledValue, true)
+            else
+                # LinearMappingIdentity: output has the same shape as input.
+                mapping(initialValue, scaledValue, true)
+            end
         end 
 
         # after the above loop, scaledValue contains the scaling coefficients of the identity-type mappings
@@ -177,7 +198,7 @@ mutable struct ProximalMappingSolver <: SpecializedOriginalADMMSubproblemSolver
         end 
         
         initialValue .= 0.0
-        @PDMOInfo logLevel "OriginalADMMSubproblemSolve: ADMM node $nodeID initialized with ProximalMappingSolver."
+        @PDMOWarn logLevel "OriginalADMMSubproblemSolve: ADMM node $nodeID initialized with ProximalMappingSolver."
         return new(scalingCoefficient, initialValue, rho, 1/(rho * scalingCoefficient^2), logLevel)
     end 
 end 

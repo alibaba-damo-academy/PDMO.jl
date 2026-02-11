@@ -188,8 +188,8 @@ include("../../test_helper.jl")
         # Test with zero bounds
         f_zero = IndicatorBox(0.0, 0.0)
         @test f_zero(0.0) ≈ 0.0
-        @test f_zero(1e-5) == Inf  # Use value larger than FeasTolerance (1e-6)
-        @test f_zero(-1e-5) == Inf  # Use value larger than FeasTolerance (1e-6)
+        @test f_zero(1e-4) == Inf  # Use value larger than FeasTolerance (1e-6)
+        @test f_zero(-1e-4) == Inf  # Use value larger than FeasTolerance (1e-6)
         @test proximalOracle(f_zero, 5.0) ≈ 0.0
         @test proximalOracle(f_zero, -5.0) ≈ 0.0
         

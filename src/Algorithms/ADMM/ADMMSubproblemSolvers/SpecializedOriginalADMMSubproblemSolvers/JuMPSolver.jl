@@ -119,7 +119,7 @@ mutable struct JuMPSolver <: SpecializedOriginalADMMSubproblemSolver
             objExpressions,
             nonlinearObjExpressions)
 
-        @PDMOInfo logLevel "OriginalADMMSubproblemSolve: ADMM node $nodeID initialized with JuMPSolver."
+        @PDMODebug logLevel "OriginalADMMSubproblemSolve: ADMM node $nodeID initialized with JuMPSolver."
         return new(model, var, objExpressions, nonlinearObjExpressions, rho, logLevel)
     end 
 end

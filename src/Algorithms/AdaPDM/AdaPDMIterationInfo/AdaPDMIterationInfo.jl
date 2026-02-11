@@ -32,11 +32,11 @@ Structure to store and track the information about the iterations of the Adaptiv
 - `dresLInf::Vector{Float64}`: Dual residuals in L-infinity norm at each iteration
 - `lagrangianObj::Vector{Float64}`: Lagrangian objective values at each iteration
 - `numberBacktracks::Vector{Int64}`: Number of backtracks in the linesearch for each iteration 
-- `primalSol::Dict{String, NumericVariable}`: Current primal solution (x^{k+1})
-- `primalSolPrev::Dict{String, NumericVariable}`: Previous primal solution (x^k)
-- `primalBuffer1::Dict{String, NumericVariable}`: Buffer for primal variable computations
-- `primalBuffer2::Dict{String, NumericVariable}`: Additional buffer for primal variable computations
-- `lineSearchPrimalBuffer::Dict{String, NumericVariable}`: Buffer for line search operations
+- `primalSol::Dict{BlockID, NumericVariable}`: Current primal solution (x^{k+1})
+- `primalSolPrev::Dict{BlockID, NumericVariable}`: Previous primal solution (x^k)
+- `primalBuffer1::Dict{BlockID, NumericVariable}`: Buffer for primal variable computations
+- `primalBuffer2::Dict{BlockID, NumericVariable}`: Additional buffer for primal variable computations
+- `lineSearchPrimalBuffer::Dict{BlockID, NumericVariable}`: Buffer for line search operations
 - `dualSol::NumericVariable`: Current dual solution (y^{k+1})
 - `dualSolPrev::NumericVariable`: Previous dual solution (y^k)
 - `bufferAx::NumericVariable`: Buffer for Ax^{k+1}
@@ -58,14 +58,15 @@ mutable struct AdaPDMIterationInfo
     presLInf::Vector{Float64}
     dresLInf::Vector{Float64}
     lagrangianObj::Vector{Float64}
+    objectiveValue::Vector{Float64}   # primal objective: Σ_i (f_i(x_i)+g_i(x_i)) + h(Ax)
     numberBacktracks::Vector{Int64} # number of backtracks in the linesearch for each iteration 
     
     # primal variables 
-    primalSol::Dict{String, NumericVariable}              # x^{k+1}         
-    primalSolPrev::Dict{String, NumericVariable}          # x^{k}
-    primalBuffer1::Dict{String, NumericVariable}          # buffer for intermediate computations 
-    primalBuffer2::Dict{String, NumericVariable}          # buffer for intermediate computations 
-    lineSearchPrimalBuffer::Dict{String, NumericVariable} # buffer for linesearch 
+    primalSol::Dict{BlockID, NumericVariable}              # x^{k+1}         
+    primalSolPrev::Dict{BlockID, NumericVariable}          # x^{k}
+    primalBuffer1::Dict{BlockID, NumericVariable}          # buffer for intermediate computations 
+    primalBuffer2::Dict{BlockID, NumericVariable}          # buffer for intermediate computations 
+    lineSearchPrimalBuffer::Dict{BlockID, NumericVariable} # buffer for linesearch 
 
     # dual variables 
     dualSol::NumericVariable                     # y^{k+1}
@@ -100,12 +101,13 @@ mutable struct AdaPDMIterationInfo
         Vector{Float64}(),
         Vector{Float64}(),
         Vector{Float64}(),
+        Vector{Float64}(),
         Vector{Int64}(),
-        Dict{String, NumericVariable}(),
-        Dict{String, NumericVariable}(),
-        Dict{String, NumericVariable}(),
-        Dict{String, NumericVariable}(),
-        Dict{String, NumericVariable}(),
+        Dict{BlockID, NumericVariable}(),
+        Dict{BlockID, NumericVariable}(),
+        Dict{BlockID, NumericVariable}(),
+        Dict{BlockID, NumericVariable}(),
+        Dict{BlockID, NumericVariable}(),
         0.0, 0.0, 0.0, 0.0, 0.0, 0.0, # dualSol, dualSolPrev, bufferAx, bufferAxPrev, dualBuffer
         Inf, Inf, Inf, Inf, # primalStepSize, primalStepSizePrev, dualStepSize, dualStepSizePrev
         0.0, # normEstimate
@@ -251,8 +253,15 @@ function computePDMResidualsAndObjective!(info::AdaPDMIterationInfo, mbp::Multib
             computeAdaPDMDualResiduals!(info, mbp, param)
         end 
 
-        # objective value requires the primal variables to be updated; set initial values to Inf
+        # objective values require the primal variables to be updated; set initial values to Inf
         push!(info.lagrangianObj, Inf)
+        push!(info.objectiveValue, Inf)
+
+        # primalObj= 0.0 
+        # for block in mbp.blocks
+        #     primalObj += (block.f)(block.val) + (block.g)(block.val)
+        # end 
+        # push!(info.objectiveValue, primalObj)
 
         # update bufferAx and bufferAxPrev 
         mappings = mbp.constraints[1].mappings 
@@ -269,9 +278,13 @@ function computePDMResidualsAndObjective!(info::AdaPDMIterationInfo, mbp::Multib
 
     # compute the Lagrangian objective value f(x) + g(x) + <y, Ax> - h^*(y) 
     copyto!(info.bufferAxPrev, info.bufferAx)
-    obj = computePartialObjective!(info, mbp) # f(x^{k+1}) + g(x^{k+1}); info.bufferAx now contains Ax^{k+1}
-    obj += dot(info.dualSol, info.bufferAx)   # f(x^{k+1}) + g(x^{k+1}) + <y^{k+1}, Ax^{k+1}>
-    axpy!(1.0, info.bufferAx, info.dualBuffer) # dualBuffer <- Ax^{k+1} + primal residuals \in \partial h^*(x^*{k+1})
+    partialObj = computePartialObjective!(info, mbp) # Σ_i (f_i+g_i); info.bufferAx now contains Ax^{k+1}
+
+    # Primal objective of the composite form: Σ_i (f_i(x_i)+g_i(x_i)) + h(Ax)
+    push!(info.objectiveValue, partialObj + (mbp.blocks[end].g)(info.bufferAx))
+
+    obj = partialObj + dot(info.dualSol, info.bufferAx)   # ... + <y^{k+1}, Ax^{k+1}>
+    axpy!(1.0, info.bufferAx, info.dualBuffer) # dualBuffer <- Ax^{k+1} + primal residuals \in \partial h^*(y^{k+1})
 
     # TODO: check feasibility tolerance 
     gValue = (mbp.blocks[end].g)(info.dualBuffer)

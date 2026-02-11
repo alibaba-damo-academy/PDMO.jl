@@ -48,3 +48,21 @@ function updateDual!(info::ADMMIterationInfo, admmGraph::ADMMBipartiteGraph, par
         axpy!(dualStepsize, info.dualBuffer[edgeID], info.dualSol[edgeID])
     end 
 end
+
+
+function updateDualDescent!(info::ADMMIterationInfo, admmGraph::ADMMBipartiteGraph, param::ADMMParam; 
+    tau::Float64=1.0, 
+    omega::Float64=4.0)
+
+    @threads for edgeID in collect(keys(info.dualSol))
+        copyto!(info.dualSolPrev[edgeID], info.dualSol[edgeID])
+    end 
+
+    rho = info.rhoHistory[end][1] 
+    dualStepsize = -1.0 * rho / (tau * omega)
+    scaledFactor = tau / (1.0 + tau)
+    @threads for edgeID in collect(keys(info.dualSol))
+        axpy!(dualStepsize, info.dualBuffer[edgeID], info.dualSol[edgeID])
+        info.dualSol[edgeID] .*= scaledFactor 
+    end 
+end 

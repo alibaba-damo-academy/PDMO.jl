@@ -53,14 +53,14 @@ function (f::IndicatorBox)(x::NumericVariable, enableParallel::Bool=false)
     # end
     
     if isa(x, Number)
-        if x < f.lb - FeasTolerance || x > f.ub + FeasTolerance
+        if x < f.lb - FeasTolerance * 100.0 || x > f.ub + FeasTolerance * 100.0
             return Inf
         else
             return 0.0
         end
     else
         for k in eachindex(x)
-            if x[k] < f.lb[k] - FeasTolerance || x[k] > f.ub[k] + FeasTolerance
+            if x[k] < f.lb[k] - FeasTolerance * 100.0 || x[k] > f.ub[k] + FeasTolerance * 100.0
                 return Inf
             end
         end

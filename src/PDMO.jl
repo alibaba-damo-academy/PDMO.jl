@@ -61,8 +61,10 @@ export ComponentwiseExponentialFunction
 export ElementwiseL1Norm 
 export FrobeniusNormSquare 
 export IndicatorBallL2 
+export IndicatorBinary 
 export IndicatorBox 
 export IndicatorHyperplane 
+export IndicatorMixedInteger 
 export IndicatorLinearSubspace 
 export IndicatorNonnegativeOrthant 
 export IndicatorPSD 
@@ -73,6 +75,7 @@ export MatrixNuclearNorm
 export QuadraticFunction 
 export UserDefinedSmoothFunction 
 export UserDefinedProximalFunction 
+export StackingProximalFunctions
 export WeightedMatrixL1Norm 
 export WrapperScalarInputFunction 
 export WrapperScalingTranslationFunction 
@@ -83,6 +86,7 @@ export proximalOracleOfConjugate, proximalOracleOfConjugate!
 
 # Export utility functions
 export estimateLipschitzConstant
+export DEC, parseDEC
 
 # Export multiblock function types and APIs
 export AbstractMultiblockFunction, QuadraticMultiblockFunction
@@ -104,6 +108,8 @@ export operatorNorm2
 export LinearMappingIdentity 
 export LinearMappingExtraction 
 export LinearMappingMatrix 
+export LinearMappingIdentityStacking
+export LinearMappingStacking
 
 
 # Export core types and functions for MultiblockGraph functionality
@@ -119,7 +125,7 @@ export createFeasibilityProblem, transformConstraintsToQuadraticPenalty
 export solveMultiblockProblemByJuMP
 export MultiblockGraph, numberNodes, numberEdges, numberEdgesByTypes, getNodelNeighbors
 export isMultiblockGraphBipartite, isMultiblockGraphConnected
-export BfsBipartization, MilpBipartization, ADMMBipartiteGraph
+export BfsBipartization, MilpBipartization, GNN_BIPARTIZATION, ADMMBipartiteGraph
 export BipartizationAlgorithm
 export BFS_BIPARTIZATION, MILP_BIPARTIZATION, DFS_BIPARTIZATION, SPANNING_TREE_BIPARTIZATION
 export getBipartizationAlgorithmName
@@ -156,7 +162,7 @@ export AbstractADMMAccelerator, AndersonAccelerator, AutoHalpernAccelerator, Nul
 export AbstractADMMAdapter, RBAdapter, SRAAdapter, NullAdapter
 export OriginalADMMSubproblemSolver, DoublyLinearizedSolver, AdaptiveLinearizedSolver
 export AbstractADMMSubproblemSolver, SpecializedOriginalADMMSubproblemSolver
-export LinearSolver, JuMPSolver, ProximalMappingSolver
+export LinearSolver, JuMPSolver, ProximalMappingSolver, ConsensusSolver
 
 # export initialize!
 # export update!

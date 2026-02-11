@@ -11,6 +11,8 @@ abstract type SpecializedOriginalADMMSubproblemSolver end
 
 include("SpecializedOriginalADMMSubproblemSolvers/LinearSolver.jl")
 include("SpecializedOriginalADMMSubproblemSolvers/ProximalMappingSolver.jl")
+include("SpecializedOriginalADMMSubproblemSolvers/ConsensusSolver.jl")
+include("SpecializedOriginalADMMSubproblemSolvers/OneDimensionalQuadraticSolver.jl")
 include("SpecializedOriginalADMMSubproblemSolvers/JuMPSolver.jl")
 
 """
@@ -153,10 +155,12 @@ function selectNodalSolver(solver::OriginalADMMSubproblemSolver,
     SpecializedOriginalADMMSubproblemSolverList = [
         LinearSolver, 
         ProximalMappingSolver,
+        # ConsensusSolver,
+        OneDimensionalQuadraticSolver,
         JuMPSolver 
     ]
 
-    for nodalSolver in SpecializedOriginalADMMSubproblemSolverList 
+    for nodalSolver in SpecializedOriginalADMMSubproblemSolverList
         try 
             solver.models[nodeID] = nodalSolver(nodeID, admmGraph, solver.edgeData, rho, logLevel)
             return true 
@@ -229,6 +233,40 @@ function initialize!(solver::OriginalADMMSubproblemSolver,
         solver.augmentedLagrangianLinearCoefficientsBuffer[nodeID] = zero(node.val)
     end
 
+
+    countLinearSolver = 0
+    countJuMPSolver = 0
+    countConsensusSolver = 0
+    countProximaMappingSolver = 0
+    countOneDimensionalQuadraticSolver = 0
+    for (nodeID, model) in solver.models 
+        if isa(model, LinearSolver)
+            countLinearSolver += 1
+        elseif isa(model, JuMPSolver)
+            countJuMPSolver += 1
+        elseif isa(model, ConsensusSolver)
+            countConsensusSolver += 1
+        elseif isa(model, ProximalMappingSolver)
+            countProximaMappingSolver += 1
+        elseif isa(model, OneDimensionalQuadraticSolver)
+            countOneDimensionalQuadraticSolver += 1
+        end 
+    end 
+    if countLinearSolver > 0
+        @PDMOInfo logLevel  "OriginalADMMSubproblemSolver: number of LinearSolver = $countLinearSolver"
+    end 
+    if countJuMPSolver > 0
+        @PDMOInfo logLevel  "OriginalADMMSubproblemSolver: number of JuMPSolver = $countJuMPSolver"
+    end 
+    if countConsensusSolver > 0
+        @PDMOInfo logLevel  "OriginalADMMSubproblemSolver: number of ConsensusSolver = $countConsensusSolver"
+    end 
+    if countProximaMappingSolver > 0
+        @PDMOInfo logLevel  "OriginalADMMSubproblemSolver: number of ProximalMappingSolver = $countProximaMappingSolver"
+    end 
+    if countOneDimensionalQuadraticSolver > 0
+        @PDMOInfo logLevel  "OriginalADMMSubproblemSolver: number of OneDimensionalQuadraticSolver = $countOneDimensionalQuadraticSolver"
+    end 
     return true 
 end 
 

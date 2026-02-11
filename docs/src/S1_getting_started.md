@@ -2,10 +2,14 @@
 Before official release, we recommend the following practice to download and use ```PDMO.jl```. 
 
 ## Installation
-Download the package and ```cd``` into the project folder.
+Download the project. From where ```PDMO.jl``` is located, run:
 ```bash 
-cd PDMO
+julia PDMO.jl/warmup.jl
 ```
+This one-time step will:
+- Set up all required dependencies
+- Configure HSL if available
+- Report HSL detection status
 
 ### HSL Setup (Optional)
 ```PDMO.jl``` relies on [Ipopt.jl](https://github.com/jump-dev/Ipopt.jl) to solve certain ADMM subproblems. Linear solvers can significantly affect the performance of `Ipopt`. For enhanced performance, you can optionally use linear solvers from [HSL](https://www.hsl.rl.ac.uk). If `HSL` is available, linear solver `MA27` will be used for `Ipopt` by default.
@@ -29,17 +33,6 @@ cd PDMO
    # Uncomment and modify this line:
    HSL_PATH = "/path/to/your/HSL_jll"
    ```
-
-### Project Setup
-Run the setup script:
-```bash 
-julia warmup.jl
-```
-
-This one-time step will:
-- Set up all required dependencies
-- Configure HSL if available
-- Report HSL detection status
 
 After successful setup, ```PDMO.jl``` is ready for use:
 ```julia 

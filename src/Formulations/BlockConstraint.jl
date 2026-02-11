@@ -296,8 +296,12 @@ function checkBlockConstraintValidity(constr::BlockConstraint)
 
     if length(constr.involvedBlocks) < 2 
         @warn("BlockConstraint: involvedBlocks has less than 2 blocks.")
-        return false 
+        
+        if isempty(constr.involvedBlocks)
+            return false 
+        end 
     end 
+
 
     for id in constr.involvedBlocks
         if haskey(constr.mappings, id) == false 

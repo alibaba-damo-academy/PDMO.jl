@@ -282,16 +282,22 @@ The function checks that if the input mbp is of the form described above. If x_{
 - `Bool`: `true` if the problem is a valid composite form, `false` otherwise.
 
 """
-function checkCompositeProblemValidity!(mbp::MultiblockProblem)
+function checkCompositeProblemValidity!(mbp::MultiblockProblem, logLevel::Int64=1)
+
+    if detectConsensusStructure(mbp)
+        @PDMOInfo logLevel "checkCompositeProblemValidity: consensus structure detected and reformulated"
+        return true 
+    end 
+
     if length(mbp.constraints) != 1
-        println("checkCompositeProblemValidity: number of constraints must be 1")
+        @PDMOError logLevel "checkCompositeProblemValidity: number of constraints must be 1"
         return false 
     end 
 
     constraint = mbp.constraints[1]
 
     if norm(constraint.rhs, Inf) > ZeroTolerance 
-        println("checkCompositeProblemValidity: right-hand side of the constraint must be 0")
+        @PDMOError logLevel "checkCompositeProblemValidity: right-hand side of the constraint must be 0"
         return false 
     end 
 
@@ -302,9 +308,11 @@ function checkCompositeProblemValidity!(mbp::MultiblockProblem)
             push!(potentialProximalOnlyBlocks, block.id)
         end 
 
-        if isSmooth(block.f) == false || isConvex(block.f) == false ||
-            isProximal(block.g) == false || isConvex(block.g) == false
-            println("checkCompositeProblemValidity: block $(block.id) is not valid for AdaPDM.")
+        if isSmooth(block.f) == false || 
+            # isConvex(block.f) == false ||
+            isProximal(block.g) == false 
+            # isConvex(block.g) == false
+            @PDMOError logLevel "checkCompositeProblemValidity: block $(block.id) is not valid for AdaPDM."
             return false 
         end 
     end 
@@ -326,6 +334,202 @@ function checkCompositeProblemValidity!(mbp::MultiblockProblem)
     return true 
 end 
 
+
+function detectConsensusStructure(mbp::MultiblockProblem)
+    # Consensus structure (classic):
+    #   constraints:  A_iz - x_i = 0  (or z - x_i = 0), for i = 1..K
+    #   blocks:       {z} plus {x_i} (each x_i appears in exactly one constraint)
+    #
+    # We detect this pattern and rewrite it into a 2-block composite form with a single stacked constraint:
+    #   [A_1z; A_2z; ...; A_Kz] - [x_1; ...; x_K] = 0
+
+    K = length(mbp.constraints)
+    if length(mbp.blocks) != K + 1
+        return false
+    end
+
+    # Fast lookup by block id.
+    blockById = Dict{BlockID, BlockVariable}(b.id => b for b in mbp.blocks)
+
+    # Count how many constraints each block participates in, and validate each constraint is 2-block.
+    appearCount = Dict{BlockID, Int}(b.id => 0 for b in mbp.blocks)
+    for c in mbp.constraints
+        if length(c.involvedBlocks) != 2
+            return false
+        end
+        for bid in c.involvedBlocks
+            appearCount[bid] = get(appearCount, bid, 0) + 1
+        end
+    end
+
+    # Identify the unique consensus block: it appears in all constraints.
+    consensusIds = BlockID[bid for (bid, cnt) in appearCount if cnt == K]
+    if length(consensusIds) != 1
+        return false
+    end
+    consensusId = consensusIds[1]
+
+    # All other blocks must appear in exactly one constraint, and must be proximal-only (f=0, g proximal).
+    for b in mbp.blocks
+        if b.id == consensusId
+            continue
+        end
+        if get(appearCount, b.id, 0) != 1
+            return false
+        end
+        if isa(b.f, Zero) == false || isProximal(b.g) == false
+            return false
+        end
+    end
+
+    consensusBlock = blockById[consensusId]
+    if isa(consensusBlock.val, Number)
+        # This reformulation stacks along the first dimension; skip scalar consensus variables.
+        return false
+    end
+
+    # Helper: given a 2-block constraint, return the "local" block id (the one that isn't the consensus block).
+    otherBlockId(c::BlockConstraint) = (c.involvedBlocks[1] == consensusId) ? c.involvedBlocks[2] : c.involvedBlocks[1]
+
+    # Extract local blocks in constraint order.
+    #
+    # We assume each consensus constraint can be normalized to the form:
+    #     Aᵢ(z) - xᵢ = 0
+    # where:
+    # - `z` is the consensus block variable,
+    # - `xᵢ` is a local block variable,
+    # - `Aᵢ` is the mapping on the consensus block (can be general),
+    # - the local-side mapping is either `-Identity` (already in the desired form), OR `+Identity`
+    #   in which case we only accept the constraint when the consensus-side mapping is `-Identity`
+    #   (i.e., the constraint is `-z + xᵢ = 0`, equivalent to `z - xᵢ = 0` after multiplying by -1).
+    #
+    # If a constraint is NOT already of the form `Aᵢ(z) - xᵢ = 0`, we only allow flipping the sign
+    # when the consensus-side mapping is an identity mapping (i.e., `xᵢ - z = 0` can be rewritten as
+    # `z - xᵢ = 0`). Otherwise return false.
+    localIds = BlockID[]
+    consensusMappings = Vector{AbstractMapping}(undef, K) # stores Aᵢ after normalization
+    sizeAlongFirstDimension = Vector{Int64}(undef, K)
+    tailShape = nothing
+
+    for (k, c) in enumerate(mbp.constraints)
+        localId = otherBlockId(c)
+        maps = c.mappings
+
+        # RHS must be zero.
+        rhs = c.rhs
+        if isa(rhs, Number)
+            if abs(rhs) > ZeroTolerance
+                return false
+            end
+        else
+            if norm(rhs, Inf) > ZeroTolerance
+                return false
+            end
+        end
+
+        # Local variable (xᵢ) shape determines the stacking shape.
+        localBlock = blockById[localId]
+        if isa(localBlock.val, Number)
+            return false
+        end
+        sX = size(localBlock.val)
+        if tailShape === nothing
+            tailShape = Base.tail(sX)
+        elseif Base.tail(sX) != tailShape
+            return false
+        end
+        sizeAlongFirstDimension[k] = sX[1]
+
+        # Normalize mapping orientation to Aᵢ(z) - xᵢ = 0.
+        mLocal = maps[localId]
+        mCons = maps[consensusId]
+
+        A = nothing
+        if isa(mLocal, LinearMappingIdentity) && mLocal.coe == -1.0
+            # Already in the desired form: Aᵢ(z) - xᵢ = 0
+            A = mCons
+        else
+            # If not in desired form, only allow flipping when consensus mapping is identity:
+            # xᵢ - z = 0  <=>  z - xᵢ = 0
+            if isa(mCons, LinearMappingIdentity) &&
+                isa(mLocal, LinearMappingIdentity) &&
+                mCons.coe == -1.0 && mLocal.coe == 1.0
+                A = LinearMappingIdentity(1.0)
+            else
+                return false
+            end
+        end
+
+        # Dimension check: Aᵢ(z) must match xᵢ in shape.
+        yAz = try
+            A(consensusBlock.val)
+        catch
+            return false
+        end
+        if isa(yAz, Number) || size(yAz) != sX
+            return false
+        end
+
+        consensusMappings[k] = A
+
+        push!(localIds, localId)
+    end
+
+    # Build stacked initial value, and build the stacked proximal function.
+    totalFirstDim = sum(sizeAlongFirstDimension)
+    outShape = (totalFirstDim, tailShape...)
+    stackedVal = length(outShape) <= 2 ? spzeros(outShape) : zeros(outShape)
+    proximalFunctions = Vector{AbstractFunction}(undef, K)
+
+    startIdx = 1
+    for (k, bid) in enumerate(localIds)
+        localBlock = blockById[bid]
+        proximalFunctions[k] = localBlock.g
+
+        blockLen = sizeAlongFirstDimension[k]
+        endIdx = startIdx + blockLen - 1
+        if ndims(stackedVal) == 1
+            @views stackedVal[startIdx:endIdx] .= localBlock.val
+        else
+            tail = ntuple(_ -> Colon(), ndims(stackedVal) - 1)
+            @views stackedVal[startIdx:endIdx, tail...] .= localBlock.val
+        end
+        startIdx = endIdx + 1
+    end
+
+    stackedBlock = BlockVariable("stacked")
+    stackedBlock.f = Zero()
+    stackedBlock.g = StackingProximalFunctions(proximalFunctions, sizeAlongFirstDimension)
+    stackedBlock.val = stackedVal
+
+    # Build the consensus-side stacked mapping:
+    # - If all consensus-side mappings are the same scaled identity, use `LinearMappingIdentityStacking`.
+    # - Otherwise, use `LinearMappingStacking` to stack their outputs.
+    consensusMap = begin
+        if all(m -> isa(m, LinearMappingIdentity), consensusMappings)
+            coe0 = (consensusMappings[1]::LinearMappingIdentity).coe
+            if all(m -> (m::LinearMappingIdentity).coe == coe0, consensusMappings)
+                LinearMappingIdentityStacking(coe0, K)
+            else
+                LinearMappingStacking(consensusMappings, sizeAlongFirstDimension)
+            end
+        else
+            LinearMappingStacking(consensusMappings, sizeAlongFirstDimension)
+        end
+    end
+
+    # Single stacked constraint: A_stack(z) - x_stacked = 0
+    newConstr = BlockConstraint(1)
+    addBlockMappingToConstraint!(newConstr, consensusId, consensusMap)
+    addBlockMappingToConstraint!(newConstr, stackedBlock.id, LinearMappingIdentity(-1.0))
+    newConstr.rhs = zero(stackedVal)
+
+    # Rewrite the problem in-place.
+    mbp.blocks = BlockVariable[consensusBlock, stackedBlock]
+    mbp.constraints = BlockConstraint[newConstr]
+
+    return true
+end 
 
 function createFeasibilityProblem(mbp::MultiblockProblem; penalizeConstraints::Bool=false)
     mbpFeas = deepcopy(mbp)

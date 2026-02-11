@@ -317,12 +317,14 @@ mutable struct ADMMBipartiteGraph
     mbpBlockID2admmNodeID::Dict{BlockID, String}
     left::Vector{String}
     right::Vector{String}
+    partitionAlgorithmTime::Float64
     # default constructor
     ADMMBipartiteGraph() = new(Dict{String, ADMMNode}(), 
         Dict{String, ADMMEdge}(), 
         Dict{BlockID, String}(), 
         Vector{String}(), 
-        Vector{String}())
+        Vector{String}(), 
+        Inf)
 end 
 
 """
@@ -422,12 +424,11 @@ edgesSplitting = Dict(
 function ADMMBipartiteGraph(graph::MultiblockGraph, 
     mbp::MultiblockProblem, 
     nodesAssignment::Dict{String, Int64},              # indicates which partition the node belongs to; 0 for left, 1 for right
-    edgesSplitting::Dict{String, Tuple{Int64, Int64}}) # (a,b) indicates how an edge is splitted; a=0 means no splitting; 
-                                                       # a=1 means splitting; 
-                                                       # b=0 means the node splitied from the edge is in the left partition; 
-                                                       # b=1 means the node splitied from the edge is in the right partition
+    edgesSplitting::Dict{String, Tuple{Int64, Int64}}, # (a,b) indicates how an edge is splitted; a=0 means no splitting; 
+    partitionAlgorithmTime::Float64)                   # partitionAlgorithmTime is the time taken by the partition algorithm
     
     admmGraph = ADMMBipartiteGraph()
+    admmGraph.partitionAlgorithmTime = partitionAlgorithmTime
     
     # create a mapping from block ID to block index in mbp.blocks
     blockID2Index = Dict{BlockID, Int64}()
@@ -541,12 +542,12 @@ function ADMMBipartiteGraph(graph::MultiblockGraph,
         else 
             # add two edges 
             if edge.type == TWO_BLOCK_EDGE 
-                # create a new node 
+                # create a new aux node 
                 newNodeID = createADMMNodeID(edgeID)
                 admmGraph.nodes[newNodeID] = ADMMNode( 
                     Zero(), 
-                    IndicatorSumOfNVariables(2, mbp.constraints[constrIdx].rhs), 
-                    initialValueSumOfNVariables(2, mbp.constraints[constrIdx].rhs), 
+                    Zero(),
+                    zero(mbp.constraints[constrIdx].rhs), 
                     Set{String}(), 
                     edgeID, 
                     edgesSplitting[edgeID][2])
@@ -558,13 +559,11 @@ function ADMMBipartiteGraph(graph::MultiblockGraph,
                 blockID1 = graph.nodes[nodeID1].source 
                 blockID2 = graph.nodes[nodeID2].source
 
-                # A_ix_i - z_1 = 0 
+                # A_ix_i - z = 0 
                 newEdgeID1 = createADMMEdgeID(edgeID, nodeID1)
                 mappings1 = Dict{String, AbstractMapping}()
                 mappings1[nodeID1] = mbp.constraints[constrIdx].mappings[blockID1]
-                mappings1[newNodeID] = LinearMappingExtraction(size(admmGraph.nodes[newNodeID].val), -1.0, 
-                    1, 
-                    size(mbp.constraints[constrIdx].rhs, 1))
+                mappings1[newNodeID] = LinearMappingIdentity(-1.0)
 
                 admmGraph.edges[newEdgeID1] = ADMMEdge(
                     nodeID1, 
@@ -576,19 +575,17 @@ function ADMMBipartiteGraph(graph::MultiblockGraph,
                 push!(admmGraph.nodes[nodeID1].neighbors, newEdgeID1)
                 push!(admmGraph.nodes[newNodeID].neighbors, newEdgeID1)
                 
-                # A_jx_j - z_2 = 0 
+                # A_jx_j + z = b
                 newEdgeID2 = createADMMEdgeID(edgeID, nodeID2)
                 mappings2 = Dict{String, AbstractMapping}()
                 mappings2[nodeID2] = mbp.constraints[constrIdx].mappings[blockID2]
-                mappings2[newNodeID] = LinearMappingExtraction(size(admmGraph.nodes[newNodeID].val), -1.0, 
-                    size(mbp.constraints[constrIdx].rhs, 1) + 1, 
-                    size(admmGraph.nodes[newNodeID].val, 1))
+                mappings2[newNodeID] = LinearMappingIdentity(1.0)
 
                 admmGraph.edges[newEdgeID2] = ADMMEdge(
                     nodeID2, 
                     newNodeID, 
                     mappings2, 
-                    zero(mbp.constraints[constrIdx].rhs), 
+                    mbp.constraints[constrIdx].rhs, 
                     edgeID)
 
                 push!(admmGraph.nodes[nodeID2].neighbors, newEdgeID2)
@@ -631,10 +628,10 @@ function ADMMBipartiteGraph(graph::MultiblockGraph,
 
                 newEdgeID2 = createADMMEdgeID(edgeID, nodeID2)
                 mappings2 = Dict{String, AbstractMapping}() 
-                mappings2[nodeID2] = LinearMappingExtraction(size(admmGraph.nodes[nodeID2].val), 1.0, 
+                mappings2[nodeID2] = LinearMappingExtraction(size(admmGraph.nodes[nodeID2].val), -1.0, 
                     (blockPosInConstr - 1) * size(mbp.constraints[constrIdx].rhs, 1) + 1, 
                     blockPosInConstr * size(mbp.constraints[constrIdx].rhs, 1))
-                mappings2[newNodeID] = LinearMappingIdentity(-1.0)
+                mappings2[newNodeID] = LinearMappingIdentity(1.0)
         
                 admmGraph.edges[newEdgeID2] = ADMMEdge( 
                    nodeID2, 
@@ -765,11 +762,17 @@ admm_graph_balanced = ADMMBipartiteGraph(graph, mbp, SPANNING_TREE_BIPARTIZATION
 - `getBipartizationAlgorithmName`: Get human-readable algorithm names
 - Bipartization algorithms: `MilpBipartization`, `BfsBipartization`, etc.
 """
-function ADMMBipartiteGraph(graph::MultiblockGraph, mbp::MultiblockProblem, algorithm::BipartizationAlgorithm, logLevel::Int64=1)
+function ADMMBipartiteGraph(graph::MultiblockGraph, 
+    mbp::MultiblockProblem, 
+    algorithm::BipartizationAlgorithm, 
+    logLevel::Int64=1; 
+    mipRelGap::Float64=0.01,
+    mipTimeLimit::Float64=60.0,
+    mipHeuristicEffort::Float64=0.2)
     if graph.isBipartite
         @PDMOInfo logLevel "ADMMBipartiteGraph: The graph is already bipartite; skip bipartization algorithm."
         edgesSplitting = Dict{String, Tuple{Int64, Int64}}(edgeID=>(0,0) for edgeID in keys(graph.edges))
-        return ADMMBipartiteGraph(graph, mbp, graph.colors, edgesSplitting)
+        return ADMMBipartiteGraph(graph, mbp, graph.colors, edgesSplitting, 0.0)
     end 
 
     nodesAssignment = Dict{String, Int64}() 
@@ -777,23 +780,34 @@ function ADMMBipartiteGraph(graph::MultiblockGraph, mbp::MultiblockProblem, algo
 
     timeStart = time()
     if algorithm == MILP_BIPARTIZATION 
-        MilpBipartization(graph, mbp, nodesAssignment, edgesSplitting) 
+        try
+            MilpBipartization(graph, mbp, nodesAssignment, edgesSplitting; mipRelGap=mipRelGap, mipTimeLimit=mipTimeLimit, mipHeuristicEffort=mipHeuristicEffort) 
+        catch e
+            @PDMOError logLevel "ADMMBipartiteGraph: MILP bipartization failed. Error: $e. Use BFS bipartization instead."
+            # @PDMOInfo logLevel "ADMMBipartiteGraph:  MILP bipartization failed. Use BFS bipartization instead."
+            empty!(nodesAssignment)
+            empty!(edgesSplitting)
+            BfsBipartization(graph, mbp, nodesAssignment, edgesSplitting)
+        end 
     elseif algorithm == BFS_BIPARTIZATION 
         BfsBipartization(graph, mbp, nodesAssignment, edgesSplitting)
     elseif algorithm == DFS_BIPARTIZATION 
         DfsBipartization(graph, mbp, nodesAssignment, edgesSplitting)
     elseif algorithm == SPANNING_TREE_BIPARTIZATION 
         SpanningTreeBipartization(graph, mbp, nodesAssignment, edgesSplitting)
+    elseif algorithm == GNN_BIPARTIZATION
+        GnnBipartization(graph, mbp, nodesAssignment, edgesSplitting)
     else 
         error("ADMMBipartiteGraph: Invalid bipartization algorithm")
     end 
 
+    partitionAlgorithmTime = time() - timeStart
     msg = Printf.@sprintf("ADMMBipartiteGraph: %s took %.2f seconds. \n", 
         getBipartizationAlgorithmName(algorithm),  
-        time() - timeStart) 
+        partitionAlgorithmTime) 
     @PDMOInfo logLevel msg 
 
-    return ADMMBipartiteGraph(graph, mbp, nodesAssignment, edgesSplitting)
+    return ADMMBipartiteGraph(graph, mbp, nodesAssignment, edgesSplitting, partitionAlgorithmTime)
 end
 
 """

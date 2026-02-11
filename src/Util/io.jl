@@ -6,7 +6,7 @@ Save RandomQP instance to JSON;
 Functions
 """
 function toDict(f::AffineFunction)
-    return Dict("A"=>f.A, "offset"=>f.offset, "FunctionType"=>"AffineFunction")
+    return Dict("A"=>f.A, "offset"=>f.r, "FunctionType"=>"AffineFunction")
 end
 
 function toDict(f::Zero)

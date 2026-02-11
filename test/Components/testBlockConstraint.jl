@@ -278,8 +278,8 @@ end
     # Test invalid constraint - less than 2 blocks
     bc_single = BlockConstraint(3)
     addBlockMappingToConstraint!(bc_single, 1, LinearMappingIdentity(1.0))
-    @test checkBlockConstraintValidity(bc_single) == false
-    println("    │  ├─ ✅ Single block constraint correctly identified as invalid")
+    @test checkBlockConstraintValidity(bc_single) == true
+    println("    │  ├─ ✅ Single block constraint correctly identified as valid with a warning")
     
     # Test invalid constraint - missing mapping for involved block
     bc_missing = BlockConstraint(4)

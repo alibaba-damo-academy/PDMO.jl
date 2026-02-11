@@ -8,11 +8,11 @@ using Logging
 Log info message if level >= 1. Wrapper around @info.
 """
 macro PDMOInfo(level, msg, args...)
-    quote
-        if $(esc(level)) >= 1
-            @info $(esc(msg)) $(esc.(args)...)
+    return esc(:(
+        if $level >= 1
+            @info $msg $(args...)
         end
-    end
+    ))
 end
 
 """
@@ -21,11 +21,11 @@ end
 Log warning message if level >= 2. Wrapper around @warn.
 """
 macro PDMOWarn(level, msg, args...)
-    quote
-        if $(esc(level)) >= 2
-            @warn $(esc(msg)) $(esc.(args)...)
+    return esc(:(
+        if $level >= 2
+            @warn $msg $(args...)
         end
-    end
+    ))
 end
 
 """
@@ -34,11 +34,11 @@ end
 Log error message if level >= 3. Wrapper around @error.
 """
 macro PDMOError(level, msg, args...)
-    quote
-        if $(esc(level)) >= 3
-            @error $(esc(msg)) $(esc.(args)...)
+    return esc(:(
+        if $level >= 3
+            @error $msg $(args...)
         end
-    end
+    ))
 end
 
 """
@@ -47,9 +47,9 @@ end
 Log debug message if level >= 3. Wrapper around @debug.
 """
 macro PDMODebug(level, msg, args...)
-    quote
-        if $(esc(level)) >= 3
-            @debug $(esc(msg)) $(esc.(args)...)
+    return esc(:(
+        if $level >= 3
+            @debug $msg $(args...)
         end
-    end
+    ))
 end

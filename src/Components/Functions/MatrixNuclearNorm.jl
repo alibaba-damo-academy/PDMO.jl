@@ -47,7 +47,10 @@ Evaluate the weighted nuclear norm: ∑ᵢ bᵢσᵢ(x)
 """
 function (f::MatrixNuclearNorm)(x::NumericVariable, enableParallel::Bool=false)
     @assert(size(x) == (f.numberRows, f.numberColumns), "MatrixNuclearNorm: input dimension mismatch")
-    F = svd(x)
+    # NOTE: In Julia >= 1.11, `svd(::SparseMatrixCSC)` may error (it routes to an `svd!` method
+    # that is not defined for sparse matrices with the required keyword arguments).
+    # Convert sparse input to a dense matrix before calling SVD.
+    F = issparse(x) ? svd(Matrix(x)) : svd(x)
     return sum(f.b .* F.S)
 end
 
@@ -61,16 +64,26 @@ function proximalOracle!(y::NumericVariable, f::MatrixNuclearNorm, x::NumericVar
     @assert(size(y) == (f.numberRows, f.numberColumns), "MatrixNuclearNorm: output dimension mismatch")
     @assert(gamma > 0.0, "MatrixNuclearNorm: gamma must be positive")  
     
-    F = svd(x)
+    # See note in function evaluation: handle sparse inputs robustly.
+    F = issparse(x) ? svd(Matrix(x)) : svd(x)
     S_prox = max.(0, F.S .- gamma .* f.b)
-    y .= F.U * Diagonal(S_prox) * F.Vt
+    Ydense = F.U * Diagonal(S_prox) * F.Vt
+
+    # Support both dense and sparse output buffers.
+    if issparse(y)
+        copyto!(y, sparse(Ydense))
+    else
+        y .= Ydense
+    end
 end     
 
 """
 Non-mutating version of the proximal operator
 """
 function proximalOracle(f::MatrixNuclearNorm, x::NumericVariable, gamma::Float64 = 1.0, enableParallel::Bool=false)
-    y = similar(x)
+    # If x is sparse, `similar(x)` is sparse, but the proximal result is generally dense.
+    # Allocate a dense buffer in that case.
+    y = issparse(x) ? Matrix{Float64}(undef, size(x)...) : similar(x)
     proximalOracle!(y, f, x, gamma, enableParallel)
     return y
 end

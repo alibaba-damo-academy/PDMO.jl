@@ -107,7 +107,7 @@ function BipartiteADMM(admmGraph::ADMMBipartiteGraph, param::ADMMParam)
     
     # initialize subproblem solver 
     if initialize!(param.solver, admmGraph, info, param.logLevel) == false 
-        @PDMOWarn param.logLevel "ADMM: failed to initialize $(getADMMSubproblemSolverName(param.solver)); set subproblem solver to DOUBLY_LINEARIZED_SOLVER instead."
+        @warn "BipartiteADMM: failed to initialize $(getADMMSubproblemSolverName(param.solver)); set subproblem solver to DOUBLY_LINEARIZED_SOLVER instead."
         param.solver = DoublyLinearizedSolver()
         initialize!(param.solver, admmGraph, info, param.logLevel)
     end 
@@ -156,7 +156,16 @@ function BipartiteADMM(admmGraph::ADMMBipartiteGraph, param::ADMMParam)
         
         # update dual variables in info.dualSol; dual updates depend on solver or accelerator
         # assume primal residuals are stored in info.dualBuffer 
-        updateDual!(info, admmGraph, param)
+        if param.dualDescent 
+            updateDualDescent!(info, admmGraph, param)
+            # if iter % 1000 == 0 && iter > 1000
+            #     rho = info.rhoHistory[end][1]
+            #     newRho = min(1e10, 1.5 * rho)
+            #     push!(info.rhoHistory, (newRho, iter))
+            # end 
+        else 
+            updateDual!(info, admmGraph, param)
+        end 
 
         # collect termination metrics after dual updates
         collectTerminationMetricsAfterDualUpdates!(terminationCriteria, info, admmGraph)

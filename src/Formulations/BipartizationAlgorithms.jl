@@ -78,6 +78,7 @@ for selecting bipartization algorithms in optimization routines.
     BFS_BIPARTIZATION
     DFS_BIPARTIZATION
     SPANNING_TREE_BIPARTIZATION
+    GNN_BIPARTIZATION
 end 
 
 # Note: The enum values BFS_BIPARTIZATION, MILP_BIPARTIZATION, etc. are already directly accessible
@@ -125,15 +126,189 @@ function getBipartizationAlgorithmName(alg::BipartizationAlgorithm)
         return "DFS_BIPARTIZATION"
     elseif alg == SPANNING_TREE_BIPARTIZATION
         return "SPANNING_TREE_BIPARTIZATION"
+    elseif alg == GNN_BIPARTIZATION
+        return "GNN_BIPARTIZATION"
     else 
         return "Unknown bipartization algorithm"
     end 
 end 
 
+# GNN bipartization is application-specific. Register a handler from application code.
+const GNN_BIPARTIZATION_HANDLER = Ref{Union{Nothing, Function}}(nothing)
+
+"""
+    registerGnnBipartization!(handler::Function)
+
+Register an application-specific GNN bipartization handler.
+
+The handler must have the signature:
+`handler(graph::MultiblockGraph, mbp::MultiblockProblem,
+         nodesAssignment::Dict{String, Int64},
+         edgesSplitting::Dict{String, Tuple{Int64, Int64}}; kwargs...)`
+"""
+function registerGnnBipartization!(handler::Function)
+    GNN_BIPARTIZATION_HANDLER[] = handler
+    return nothing
+end
+
+"""
+    clearGnnBipartization!()
+
+Clear any previously registered GNN bipartization handler.
+"""
+function clearGnnBipartization!()
+    GNN_BIPARTIZATION_HANDLER[] = nothing
+    return nothing
+end
+
+"""
+    hasGnnBipartization() -> Bool
+
+Return true if a GNN bipartization handler is registered.
+"""
+function hasGnnBipartization()
+    return GNN_BIPARTIZATION_HANDLER[] !== nothing
+end
+
+"""
+    GnnBipartization(graph, mbp, nodesAssignment, edgesSplitting; kwargs...)
+
+Call the registered GNN bipartization handler.
+"""
+function GnnBipartization(graph::MultiblockGraph,
+    mbp::MultiblockProblem,
+    nodesAssignment::Dict{String, Int64},
+    edgesSplitting::Dict{String, Tuple{Int64, Int64}};
+    kwargs...)
+    handler = GNN_BIPARTIZATION_HANDLER[]
+    if handler === nothing
+        error("GNN bipartization is not registered. Call registerGnnBipartization! from application code.")
+    end
+    return handler(graph, mbp, nodesAssignment, edgesSplitting; kwargs...)
+end
+
+# function MilpBipartization0(graph::MultiblockGraph, 
+#     mbp::MultiblockProblem, 
+#     nodesAssignment::Dict{String, Int64}, 
+#     edgesSplitting::Dict{String, Tuple{Int64, Int64}})
+    
+#     empty!(nodesAssignment)
+#     empty!(edgesSplitting)
+
+#     nodes = collect(keys(graph.nodes))
+#     edges = collect(keys(graph.edges))
+
+#     model = JuMP.Model(HiGHS.Optimizer)
+#     JuMP.set_silent(model)
+    
+#     # add variables 
+#     JuMP.@variable(model, x_node_L[i in nodes], Bin)
+#     JuMP.@variable(model, x_node_R[i in nodes], Bin)
+#     JuMP.@variable(model, z_edge[e in edges], Bin)
+#     JuMP.@variable(model, x_edge_L[e in edges], Bin)
+#     JuMP.@variable(model, x_edge_R[e in edges], Bin)
+
+#     # add constraints 
+#     JuMP.@constraint(model, [i in nodes], x_node_L[i] + x_node_R[i] == 1)
+#     JuMP.@constraint(model, [e in edges], x_edge_L[e] + x_edge_R[e] == z_edge[e])
+    
+#     JuMP.@constraint(model, [e in edges], x_node_L[graph.edges[e].nodeID1] + x_node_L[graph.edges[e].nodeID2] <= 1 + z_edge[e])
+#     JuMP.@constraint(model, [e in edges], x_node_L[graph.edges[e].nodeID1] + x_node_L[graph.edges[e].nodeID2] >= 1 - z_edge[e])
+
+#     JuMP.@constraint(model, [e in edges], x_node_L[graph.edges[e].nodeID1] + x_edge_L[e] <= 2 - z_edge[e])
+#     JuMP.@constraint(model, [e in edges], x_node_L[graph.edges[e].nodeID1] + x_edge_L[e] >= z_edge[e])
+
+#     JuMP.@constraint(model, [e in edges], x_node_L[graph.edges[e].nodeID2] + x_edge_L[e] <= 2 - z_edge[e])
+#     JuMP.@constraint(model, [e in edges], x_node_L[graph.edges[e].nodeID2] + x_edge_L[e] >= z_edge[e])
+
+#     # add objective terms for \|A\| and \|B\|
+#     JuMP.@variable(model, t_L, lower_bound = 0.0)
+#     JuMP.@variable(model, t_R, lower_bound = 0.0)
+
+#     # create a mapping from constraint ID to constraint index in mbp.constraints
+#     constraintID2Index = Dict{BlockID, Int64}() 
+#     numberConstraints = length(mbp.constraints)
+#     for idx in 1:numberConstraints 
+#         constraintID2Index[mbp.constraints[idx].id] = idx
+#     end 
+    
+#     for e in edges 
+#         nodeID1 = graph.edges[e].nodeID1
+#         nodeID2 = graph.edges[e].nodeID2
+        
+#         opnorm1 = 0.0 
+#         opnorm2 = 0.0 
+
+#         constrID = graph.edges[e].sourceBlockConstraint
+#         constrIdx = constraintID2Index[constrID]
+
+#         numberInvolvedBlocks = length(mbp.constraints[constrIdx].involvedBlocks)
+#         if graph.edges[e].type == TWO_BLOCK_EDGE
+#             @assert(numberInvolvedBlocks == 2, "MilpBipartization: $(numberInvolvedBlocks) block indices encountered; 2 expected")
+
+#             blockID1 = mbp.constraints[constrIdx].involvedBlocks[1]
+#             @assert(blockID1 == graph.nodes[nodeID1].source, "MilpBipartization: blockID1 mismatch")
+            
+#             blockID2 = mbp.constraints[constrIdx].involvedBlocks[2]
+#             @assert(blockID2 == graph.nodes[nodeID2].source, "MilpBipartization: blockID2 mismatch")
+
+#             opnorm1 = operatorNorm2(mbp.constraints[constrIdx].mappings[blockID1])
+#             opnorm2 = operatorNorm2(mbp.constraints[constrIdx].mappings[blockID2])
+#         else 
+#             @assert(numberInvolvedBlocks > 2, "MilpBipartization: $(numberInvolvedBlocks) block indices encountered; > 2 expected")
+
+#             blockID = graph.edges[e].sourceBlockVariable
+#             @assert(blockID == graph.nodes[nodeID1].source, "MilpBipartization: blockID mismatch")
+#             @assert(constrID == graph.nodes[nodeID2].source, "MilpBipartization: constraintID mismatch")
+
+#             opnorm1 = operatorNorm2(mbp.constraints[constrIdx].mappings[blockID])
+#             opnorm2 = 1.0 
+#         end 
+        
+#         JuMP.@constraint(model, t_L >= opnorm1 * x_node_L[nodeID1] + x_edge_L[e])
+#         JuMP.@constraint(model, t_L >= opnorm2 * x_node_L[nodeID2] + x_edge_L[e])
+
+#         JuMP.@constraint(model, t_R >= opnorm1 * x_node_R[nodeID1] + x_edge_R[e])
+#         JuMP.@constraint(model, t_R >= opnorm2 * x_node_R[nodeID2] + x_edge_R[e])
+#     end
+
+#     # JuMP.@objective(model, Min, t_L + t_R + number of nodes)
+#     JuMP.@objective(model, Min, t_L + t_R + sum(x_node_L) + sum(x_node_R) + sum(x_edge_L) + sum(x_edge_R))
+
+#     # optimize
+#     JuMP.optimize!(model)
+
+#     # collect features
+#     for i in nodes 
+#         if JuMP.value(x_node_L[i]) > 0.5 # the node belongs to L 
+#             nodesAssignment[i] = 0 
+#         else 
+#             nodesAssignment[i] = 1      # the node belongs to R
+#         end 
+#     end 
+
+#     for e in edges 
+#         if JuMP.value(z_edge[e]) < 0.5
+#             edgesSplitting[e] = (0,0)
+#         else 
+#             if JuMP.value(x_edge_L[e]) > 0.5 
+#                 edgesSplitting[e] = (1,0)
+#             else 
+#                 edgesSplitting[e] = (1,1)
+#             end 
+#         end 
+#     end 
+# end 
 """ 
-    MilpBipartization(graph::MultiblockGraph, mbp::MultiblockProblem, 
-                     nodesAssignment::Dict{String, Int64}, 
-                     edgesSplitting::Dict{String, Tuple{Int64, Int64}})
+    MilpBipartization(
+        graph::MultiblockGraph,
+        mbp::MultiblockProblem,
+        nodesAssignment::Dict{String, Int64},
+        edgesSplitting::Dict{String, Tuple{Int64, Int64}};
+        mipRelGap::Float64 = 0.5,
+        mipTimeLimit::Float64 = 60.0,
+        mipHeuristicEffort::Float64 = 0.2,
+    )
 
 Bipartization algorithm using Mixed Integer Linear Programming (MILP).
 
@@ -141,12 +316,19 @@ This algorithm formulates the graph bipartization problem as an optimization pro
 finds the optimal bipartite structure while minimizing operator norms and graph complexity.
 
 # Arguments
-- `graph::MultiblockGraph`: The graph to bipartize
-- `mbp::MultiblockProblem`: The original multiblock problem (used for operator norm calculations)
-- `nodesAssignment::Dict{String, Int64}`: Dictionary to store node partition assignments (0 for left, 1 for right)
-- `edgesSplitting::Dict{String, Tuple{Int64, Int64}}`: Dictionary to store edge splitting decisions (a,b) where:
+- `graph::MultiblockGraph`: The graph to bipartize.
+- `mbp::MultiblockProblem`: The original multiblock problem (used for operator norm calculations).
+- `nodesAssignment::Dict{String, Int64}`: Output dictionary for node partition assignments (`0` for left, `1` for right).
+  This dictionary is cleared at the beginning of the function and then populated.
+- `edgesSplitting::Dict{String, Tuple{Int64, Int64}}`: Output dictionary for edge splitting decisions `(a, b)` where:
   - a = 0: edge not split, a = 1: edge split
   - b = 0: assigned to left partition, b = 1: assigned to right partition
+  This dictionary is cleared at the beginning of the function and then populated.
+
+# Keyword Arguments
+- `mipRelGap::Float64=0.5`: Relative MIP optimality gap passed to HiGHS (`"mip_rel_gap"`).
+- `mipTimeLimit::Float64=60.0`: Time limit (seconds) passed to HiGHS (`"time_limit"`).
+- `mipHeuristicEffort::Float64=0.2`: Heuristic effort passed to HiGHS (`"mip_heuristic_effort"`).
 
 # Algorithm Steps
 1. **Variable Creation**: Binary variables for node assignments and edge splitting decisions
@@ -183,7 +365,10 @@ particularly for problems where operator norm considerations are critical for nu
 function MilpBipartization(graph::MultiblockGraph, 
     mbp::MultiblockProblem, 
     nodesAssignment::Dict{String, Int64}, 
-    edgesSplitting::Dict{String, Tuple{Int64, Int64}})
+    edgesSplitting::Dict{String, Tuple{Int64, Int64}};
+    mipRelGap::Float64=0.5, 
+    mipTimeLimit::Float64=60.0,
+    mipHeuristicEffort::Float64=0.2)
     
     empty!(nodesAssignment)
     empty!(edgesSplitting)
@@ -192,7 +377,10 @@ function MilpBipartization(graph::MultiblockGraph,
     edges = collect(keys(graph.edges))
 
     model = JuMP.Model(HiGHS.Optimizer)
-    JuMP.set_silent(model)
+    JuMP.set_optimizer_attribute(model, "mip_rel_gap", mipRelGap)
+    JuMP.set_optimizer_attribute(model, "mip_heuristic_effort", mipHeuristicEffort)
+    JuMP.set_optimizer_attribute(model, "time_limit", mipTimeLimit)
+    # JuMP.set_silent(model)
     
     # add variables 
     JuMP.@variable(model, x_node_L[i in nodes], Bin)
@@ -225,13 +413,11 @@ function MilpBipartization(graph::MultiblockGraph,
         constraintID2Index[mbp.constraints[idx].id] = idx
     end 
     
+    nodeNorm = Dict{String, Float64}(i=>0.0 for i in nodes)
     for e in edges 
         nodeID1 = graph.edges[e].nodeID1
         nodeID2 = graph.edges[e].nodeID2
         
-        opnorm1 = 0.0 
-        opnorm2 = 0.0 
-
         constrID = graph.edges[e].sourceBlockConstraint
         constrIdx = constraintID2Index[constrID]
 
@@ -245,8 +431,8 @@ function MilpBipartization(graph::MultiblockGraph,
             blockID2 = mbp.constraints[constrIdx].involvedBlocks[2]
             @assert(blockID2 == graph.nodes[nodeID2].source, "MilpBipartization: blockID2 mismatch")
 
-            opnorm1 = operatorNorm2(mbp.constraints[constrIdx].mappings[blockID1])
-            opnorm2 = operatorNorm2(mbp.constraints[constrIdx].mappings[blockID2])
+            nodeNorm[nodeID1] += operatorNorm2(mbp.constraints[constrIdx].mappings[blockID1])^2
+            nodeNorm[nodeID2] += operatorNorm2(mbp.constraints[constrIdx].mappings[blockID2])^2
         else 
             @assert(numberInvolvedBlocks > 2, "MilpBipartization: $(numberInvolvedBlocks) block indices encountered; > 2 expected")
 
@@ -254,16 +440,21 @@ function MilpBipartization(graph::MultiblockGraph,
             @assert(blockID == graph.nodes[nodeID1].source, "MilpBipartization: blockID mismatch")
             @assert(constrID == graph.nodes[nodeID2].source, "MilpBipartization: constraintID mismatch")
 
-            opnorm1 = operatorNorm2(mbp.constraints[constrIdx].mappings[blockID])
-            opnorm2 = 1.0 
+            nodeNorm[nodeID1] += operatorNorm2(mbp.constraints[constrIdx].mappings[blockID])^2
+            nodeNorm[nodeID2] += 1.0 
         end 
-        
-        JuMP.@constraint(model, t_L >= opnorm1 * x_node_L[nodeID1] + x_edge_L[e])
-        JuMP.@constraint(model, t_L >= opnorm2 * x_node_L[nodeID2] + x_edge_L[e])
-
-        JuMP.@constraint(model, t_R >= opnorm1 * x_node_R[nodeID1] + x_edge_R[e])
-        JuMP.@constraint(model, t_R >= opnorm2 * x_node_R[nodeID2] + x_edge_R[e])
     end
+
+    for i in nodes 
+        nodeNorm[i] = sqrt(nodeNorm[i])
+        JuMP.@constraint(model, t_L >= nodeNorm[i] * x_node_L[i])
+        JuMP.@constraint(model, t_R >= nodeNorm[i] * x_node_R[i])
+    end 
+    for e in edges 
+        JuMP.@constraint(model, t_L >= 1.414 * x_edge_L[e])
+        JuMP.@constraint(model, t_R >= 1.414 * x_edge_R[e])
+    end 
+
 
     # JuMP.@objective(model, Min, t_L + t_R + number of nodes)
     JuMP.@objective(model, Min, t_L + t_R + sum(x_node_L) + sum(x_node_R) + sum(x_edge_L) + sum(x_edge_R))

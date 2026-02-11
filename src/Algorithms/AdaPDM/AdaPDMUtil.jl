@@ -56,7 +56,8 @@ function AdaPDMLog(iter, info::AdaPDMIterationInfo, param::AbstractAdaPDMParam; 
 
     if (header)
         Printf.@printf("%10s ", "ITERATION") 
-        Printf.@printf("%12s ", "LAGRANGIAN")  
+        Printf.@printf("%12s ", "LAGRANGIAN") 
+        Printf.@printf("%12s ", "OBJ") 
         Printf.@printf("%12s ", "PRES(l2)")
         Printf.@printf("%12s ", "PRES(lInf)")  
         Printf.@printf("%12s ", "DRES(l2)")
@@ -70,10 +71,12 @@ function AdaPDMLog(iter, info::AdaPDMIterationInfo, param::AbstractAdaPDMParam; 
     dresL2 = info.dresL2[end]
     dresLInf = info.dresLInf[end]
     time = info.totalTime
+    primalObj = info.objectiveValue[end]
 
-    Printf.@printf("%10d %12.4e %12.4e %12.4e %12.4e %12.4e %9.2f\n", 
+    Printf.@printf("%10d %12.4e %12.4e %12.4e %12.4e %12.4e %12.4e %9.2f\n", 
             iter, 
             obj, 
+            primalObj,
             presL2, presLInf, 
             dresL2, dresLInf,
             time)
@@ -136,6 +139,7 @@ function AdaPDMLog(info::AdaPDMIterationInfo, logLevel::Int64, trueObj::Float64=
     @PDMOInfo logLevel "AdaPDM Summary: "
     Printf.@printf("    Solver Status   =   %s\n", getTerminationStatus(info.terminationStatus))
     Printf.@printf("    Lagrangian      = %12.4e\n", info.lagrangianObj[end])
+    Printf.@printf("           Obj      = %12.4e\n", info.objectiveValue[end])
     Printf.@printf("    Pres (L2)       = %12.4e\n", info.presL2[end])
     Printf.@printf("    Pres (LInf)     = %12.4e\n", info.presLInf[end])
     Printf.@printf("    Dres (L2)       = %12.4e\n", info.dresL2[end])

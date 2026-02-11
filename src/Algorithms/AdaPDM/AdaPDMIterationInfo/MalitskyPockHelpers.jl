@@ -115,12 +115,12 @@ end
     setupInitialPrimalDualStepSize!(info::AdaPDMIterationInfo, param::MalitskyPockParam)
 
 Initializes the primal and dual step sizes for the Malitsky-Pock algorithm.
-The primal step size is initially set to 0, while the dual step size is set based on 
+The primal step size is initially set to 1, while the dual step size is set based on 
 the parameters provided in `param`. The previous dual step size is set as a fraction 
 of the initial dual step size, controlled by the `initialTheta` parameter.
 """
 function setupInitialPrimalDualStepSize!(info::AdaPDMIterationInfo, param::MalitskyPockParam)
-    info.primalStepSize = 0.0
+    info.primalStepSize = 1.0
     info.dualStepSize = param.initialSigma
     info.dualStepSizePrev = param.initialSigma * param.initialTheta 
 end

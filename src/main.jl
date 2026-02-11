@@ -1,4 +1,5 @@
 include("Util/PDMOLogger.jl")
+include("Util/DEC.jl")
 
 # basic algorithmic components
 include("Components/Functions/AbstractFunction.jl")
@@ -92,6 +93,9 @@ function runBipartiteADMM(mbp::MultiblockProblem,
     param::ADMMParam;
     saveSolutionInMultiblockProblem::Bool = true,  
     bipartizationAlgorithm::BipartizationAlgorithm = BFS_BIPARTIZATION,
+    mipRelGap::Float64 = 0.01, 
+    mipTimeLimit::Float64 = 60.0,
+    mipHeuristicEffort::Float64 = 0.2,
     trueObj::Float64 = Inf,
     tryJuMP::Bool = true)
 
@@ -118,11 +122,15 @@ function runBipartiteADMM(mbp::MultiblockProblem,
     summary(graph, param.logLevel)
 
     # 4. generate ADMM bipartite graph 
-    admmGraph = ADMMBipartiteGraph(graph, mbp, bipartizationAlgorithm, param.logLevel)
+    admmGraph = ADMMBipartiteGraph(graph, mbp, bipartizationAlgorithm, param.logLevel; 
+        mipRelGap=mipRelGap, 
+        mipTimeLimit=mipTimeLimit,
+        mipHeuristicEffort=mipHeuristicEffort)
     summary(admmGraph, param.logLevel)
 
     # 5. execute ADMM
     info = BipartiteADMM(admmGraph, param)
+    info.partitionAlgorithmTime = admmGraph.partitionAlgorithmTime
     
     # 6. retrieve primal solution
     primalSolution = Dict{BlockID, NumericVariable}() 
@@ -239,7 +247,7 @@ function runAdaPDM(mbp::MultiblockProblem, param::AbstractAdaPDMParam;
         return
     end 
 
-    if checkCompositeProblemValidity!(mbp) == false 
+    if checkCompositeProblemValidity!(mbp, param.logLevel) == false 
         @PDMOError param.logLevel "runAdaPDM: The instance is not ready for adpative primal-dual method."
         return
     end 

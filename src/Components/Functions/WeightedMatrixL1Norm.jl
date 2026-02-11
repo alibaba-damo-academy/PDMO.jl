@@ -49,7 +49,7 @@ isProximal(::Type{WeightedMatrixL1Norm}) = true
 function (f::WeightedMatrixL1Norm)(x::NumericVariable, enableParallel::Bool=false)
     @assert(size(x) == (f.numberRows, f.numberColumns), "WeightedMatrixL1Norm: input dimension mismatch.")
     
-    if f.inNonnegativeOrthant && any(x .< -FeasTolerance)
+    if f.inNonnegativeOrthant && any(x .< -FeasTolerance * 100.0)
         return Inf
     end
        

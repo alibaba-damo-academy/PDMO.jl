@@ -19,30 +19,26 @@ state-of-the-art solvers.
 ```
 where we have the following problem variables and data:
 
-```math
-\begin{array}{ccc}
-n~\textbf{Block Variables} \quad & m~\textbf{ Block Constraints} \quad & \textbf{Block Matrix}~ (m \times n ~ \textbf{linear operators}) \\
-\mathbf{x} = \begin{bmatrix} x_1 \\ x_2 \\ \vdots \\ x_n \end{bmatrix} \quad & \mathbf{b} = \begin{bmatrix} b_1 \\ b_2 \\ \vdots \\ b_m \end{bmatrix} \quad & \mathbf{A} = \begin{bmatrix} \mathbf{A}_{1,1} & \mathbf{A}_{1,2} & \cdots & \mathbf{A}_{1,n} \\ \mathbf{A}_{2,1} & \mathbf{A}_{2,2} & \cdots & \mathbf{A}_{2,n} \\ \vdots & \vdots & \ddots & \vdots \\ \mathbf{A}_{m,1} & \mathbf{A}_{m,2} & \cdots & \mathbf{A}_{m,n} \end{bmatrix} \\
-\end{array}
-```
+| **$n$ Block Variables** | **$m$ Block Constraints** | **Block Matrix of $m\times n$ Linear Operators** |
+|:---:|:---:|:---:|
+| $\mathbf{x} = \begin{bmatrix} x_1 \\ x_2 \\ \vdots \\ x_n \end{bmatrix}$ | $\mathbf{b} = \begin{bmatrix} b_1 \\ b_2 \\ \vdots \\ b_m \end{bmatrix}$ | $\mathbf{A} = \begin{bmatrix} \mathbf{A}_{1,1} & \mathbf{A}_{1,2} & \cdots & \mathbf{A}_{1,n} \\ \mathbf{A}_{2,1} & \mathbf{A}_{2,2} & \cdots & \mathbf{A}_{2,n} \\ \vdots & \vdots &  & \vdots \\ \mathbf{A}_{m,1} & \mathbf{A}_{m,2} & \cdots & \mathbf{A}_{m,n} \end{bmatrix}$ |
 
 More specifically, 
 - For each $j\in \{1,\cdots,n\}$, a `BlockVariable` $x_j$ represents a numeric array (i.e., scalar, vector, matrix, etc.), and is associated with two objective functions: 
     - each $f_j$ is differentiable, and $f_j(\cdot)$ and $\nabla f_j(\cdot)$ are available; 
     - each $g_j$ is proximable, and $g_j(\cdot)$ and $\text{prox}_{\gamma g_j}(\cdot)$ are available.
-- For each $i \in \{1,\cdots,m\}$, a `BlockConstraint` is defined by some linear operators and a right-hand side array: 
+- For each $i \in \{1,\cdots,m\}$, a `BlockConstraint` is defined by $\mathbf{A}_{i,1},\cdots, \mathbf{A}_{i,n}$, and $b_i$: 
     - the linear operator $\mathbf{A}_{i,j}$ is **non-zero** if and only if constraint $i$ involves blocks $x_j$;
-    - the adjoint operator of $\mathbf{A}_{i,j}$ is available;
     - the right-hand side $b_i$ can be a numeric array of any shape. 
-- Additionally, there might exist a smooth function $F$ that couples all BlockVariables:
-    - we assume that $F(\cdot)$, $\nabla F(\cdot)$,  and $\nabla_j F(\cdot)$'s for $j\in \{1,\cdots, n\}$ are available.
+- Additionally, there might exist a smooth function $F$ that couples all `BlockVariable`s:
+    - we assume that $F(\cdot)$, $\nabla F(\cdot)$, and $\nabla_j F(\cdot)$'s for $j\in \{1,\cdots, n\}$ are available;  
 
 ### Algorithms
 
 `PDMO.jl` provides various algorithms to solve problems of the above form.
 
 - **Alternating Direction Method of Multipliers (ADMM)**
-  - Graph-based bipartization methods automatically generate ADMM-ready reformulations of `MultiblockProblem` when $F=0$.
+  - Graph-based bipartization methods automatically generate ADMM-ready reformulations of `MultiblockProblem` when $F = 0$. 
   - Various ADMM variants are available: 
     - Original ADMM 
     - Doubly linearized ADMM 
@@ -51,21 +47,30 @@ More specifically,
     - Penalty adapters, e.g., Residual Balancing, Spectral Radius Approximation
     - Accelerators, e.g., Halpern (with or without restart), Filtered Anderson
 
-- **Adaptive Primal-Dual Method (AdaPDM)**:
-  - A suite of efficient and adaptive methods for problems with simpler coupling, i.e., $m=1$, $F=f_n = 0$, and $\mathbf{A}_{1, n} = -\mathrm{Id}$. 
+- **Adaptive Primal-Dual Method (AdaPDM)**
+  - A suite of efficient and adaptive methods for problems with simpler coupling:
+  ```math 
+    \begin{aligned}
+    \min_{\mathbf{x}} \quad & \sum_{j=1}^{n-1} \left( f_j(x_j) + g_j(x_j) \right) + g_n(\mathbf{A}_{1,1}x_1 + \cdots + \mathbf{A}_{1,n-1}x_{n-1})
+    \end{aligned}
+  ```
   - Various methods can be selected: 
     - Original Condat-Vu
     - AdaPDM 
     - AdaPDM+
     - Malitsky-Pock
     
-- **Block Coordinate Descent (BCD)** 
-  - A suite of classic methods for problems without constraints, i.e., $m=0$. 
-  - Various subproblem solvers can be selected (Xu and Yin 2013):
-      - Original BCD Subproblem Solver
-      - Proximal BCD Subproblem Solver
-      - Prox-linear BCD Subproblem Solver
-
+- **Block Coordinate Descent (BCD)**
+  - A suite of classic methods for problems without constraints, i.e., $m=0$.
+  ```math 
+    \begin{aligned}
+    \min_{\mathbf{x}} \quad & F\mathbf(\mathbf{x})  + \sum_{j=1}^{n} \left( f_j(x_j) + g_j(x_j) \right)
+    \end{aligned}
+  ```
+  - Various subproblem solvers can be selected: 
+    - Original BCD Subproblem Solver
+    - Proximal BCD Subproblem Solver
+    - Prox-linear BCD Subproblem Solver
 
 ### Key Features 
 - 🧱 **Unified Modeling**: A versatile interface for structured problems.
@@ -94,7 +99,7 @@ More specifically,
 ## This Documentation 
 
 - Check out [**Getting Started**](S1_getting_started.md) for installation guide and your first optimization problem with ```PDMO.jl```.
-- Learn more about the theoretical foundations of [**ADMM**](S2_algorithms/ADMM.md), [**AdaPDM**](S2_algorithms/AdaPDM.md), and [**BCD**](S2_algorithms/BCD.md) and how to explore different algorithmic components for better performance. 
+- Learn more about the theoretical foundations of [**ADMM**](S2_algorithms/ADMM.md), [**AdaPDM**](S2_algorithms/AdaPDM.md) and [**BCD**](S2_algorithms/BCD.md), and how to explore different algorithmic components for better performance. 
 - See [**Examples**](S3_examples/LeastL1Norm.md) for pre-defined templates of some classic applications and benchmark results.
 - Check out [**API References**](S4_api/main.md) to implement and customize your own algorithms
 
@@ -105,4 +110,5 @@ More specifically,
 
 ## License
 Currently ```PDMO.jl``` is under the MIT License.
+
 
