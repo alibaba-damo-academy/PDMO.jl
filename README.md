@@ -51,11 +51,6 @@ More specifically,
     - Accelerators, e.g., Halpern (with or without restart), Filtered Anderson
 
 - **Adaptive Primal-Dual Method (AdaPDM)**
-    ```math 
-    \begin{aligned}
-        \min_{\mathbf{x}} \quad & \sum_{j=1}^{n-1} \left( f_j(x_j) + g_j(x_j) \right) + g_n(\mathbf{A}_{1,1}x_1 + \cdots + \mathbf{A}_{1,n-1}x_{n-1})
-    \end{aligned}
-    ```
   - A suite of efficient and adaptive methods for problems with simpler coupling.
   - Various methods can be selected : 
     - Original Condat-Vũ Method (Condat 2013, Vũ 2013)
