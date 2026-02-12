@@ -34,7 +34,7 @@ More specifically,
     - the adjoint operator of $\mathbf{A}_{i,j}$ is available;
     - the right-hand side $b_i$ can be a numeric array of any shape. 
 - Additionally, there might exist a smooth function $F$ that couples all BlockVariables:
-    - we assume that $F(\cdot)$, $\nabla F(\cdot)$,  and $\nabla_j F(\cdot)$'s for $j\in \{1,\cdots, n\}$ are available.
+    - we assume that $F(\cdot)$, $\nabla F(\cdot)$,  and $\nabla_j F(\cdot)$'s are available.
     
 ## Available Algorithms
 
