@@ -467,9 +467,10 @@ function updateGammaAndDual!(solver::AdaptiveLinearizedSolver, info::ADMMIterati
                  b^2*dot(Gk, Gk)/(2*γk)
     end
 
+    
     λA = safe_div(numA, denA)
     μA = safe_div(numμA, denμA)
-    μA = abs(μA) < 1e-2 ? 1e-2 : μA #if |μA|<eps  , then μA= eps. if |μA|> eps then μA = μA
+    μA = abs(μA) < 1e-2 ? 1e-2 : μA #if |μA|<eps  , then μA= eps. if |μA|> eps then μA = μA for numerical stability.
     λB = safe_div(numB, denB)
     μB = safe_div(numμB, denμB)
     μB = abs(μB) < 1e-2 ? 1e-2 : μB
@@ -500,44 +501,16 @@ function updateGammaAndDual!(solver::AdaptiveLinearizedSolver, info::ADMMIterati
         Γy =  solve_cubic_real(αy, βy , γcy , δcy)
     end
 
-    # # === DEBUG: Print key numerical quantities ===
-    # println("=== AdaptiveLinearizedSolver DEBUG ===")
-    # println("γk = $γk")
-    # println("Geometric quantities:")
-    # println("  Lx = $Lx, Ly = $Ly")
-    # println("  ℓx = $ℓx, ℓy = $ℓy") 
-    # println("  δx = $δx, δy = $δy")
-    # println("  a = $a, b = $b")
-    # println("  λA = $λA, λB = $λB")
-    # println("  μA = $μA, μB = $μB")
-    # println("Cubic roots: Γx = $Γx, Γy = $Γy")
-    # println("Problem scale: norm_du = $norm_du")
-    # println("=======================================")
-    # println()
-
-
     # Step5) Update γ
     cand1 = solver.ifSimple ?  (3/2) * γk  : solver.φ * γk
     cand2 = solver.ifSimple ?  sqrt((4-λA-λB)/(32*(solver.r)*(a^2+b^2)))  : ((4-λA-λB)/(4*(solver.r)))*(1/((μA+μB)/(solver.r) + sqrt((μA+μB)^2/(solver.r)^2 + (a^2 + b^2)*(4-λA-λB)/(2*(solver.r)))))
     
-    # println("Step size candidates:")
-    # println("  cand1 = $cand1")
-    # println("  cand2 = $cand2") 
-    # println("  Γx = $Γx")
-    # println("  Γy = $Γy")
-    
     cands = filter(x -> isfinite(x), (cand1, cand2, Γx, Γy ))
-    # println("Valid candidates: $cands")
     
     if isempty(cands)
         error("All γ–candidates are NaN/Inf; something is wrong")
     end
-    solver.proximalStepsizeGamma = minimum(cands)
-    # println("Selected γ = $(solver.proximalStepsizeGamma)")
-    # println("=======================================")
-    # println()
-
-    
+    solver.proximalStepsizeGamma = minimum(cands)  
 
     # Update Dual and save u^{k+1} to info.Sol
     for edgeID in collect(keys(info.dualSol))

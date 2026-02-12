@@ -84,7 +84,7 @@ function AdaPDMPlusParam(mbp::MultiblockProblem;
     stepSizeNu::Float64=1.2,
     opNormEstimateProvided::Float64=Inf, 
     backtrackingFactor::Float64=2.0, 
-    normEstimateShrinkingFactor::Float64=0.95,
+    normEstimateShrinkingFactor::Float64=1.00,
     presTolL2::Float64=1e-4,
     dresTolL2::Float64=1e-4,
     presTolLInf::Float64=1e-6,

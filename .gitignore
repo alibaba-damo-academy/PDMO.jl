@@ -29,7 +29,16 @@ Thumbs.db
 *.swp
 *.swo
 *~
-
+.png 
+.jpg
+.jpeg
+.gif
+.bmp
+.tiff
+.ico
+.webp
+.svg
+.eps
 # Temporary files
 *.tmp
 *.temp

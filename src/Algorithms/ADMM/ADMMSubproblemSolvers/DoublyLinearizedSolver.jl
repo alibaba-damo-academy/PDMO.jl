@@ -67,8 +67,8 @@ function computeProximalStepsize!(solver::DoublyLinearizedSolver, rho::Float64)
     # estimate alpha and beta 
     solver.proximalStepsizeAlpha = 1.0 / (solver.maxLeftMatrixAdjointSelfOperatorNorm * rho + solver.maxLeftLipschitzConstant + 100 * FeasTolerance)
     solver.proximalStepsizeBeta = 1.0 / (solver.maxRightMatrixAdjointSelfOperatorNorm * rho + 3 * solver.maxRightLipschitzConstant + 100 * FeasTolerance)
-    solver.proximalStepsizeAlpha = clamp(solver.proximalStepsizeAlpha, 1.0e-8, 1.0e-4)
-    solver.proximalStepsizeBeta = clamp(solver.proximalStepsizeBeta, 1.0e-8, 1.0e-4)
+    solver.proximalStepsizeAlpha = clamp(solver.proximalStepsizeAlpha, 1.0e-8, 1.0e-2)
+    solver.proximalStepsizeBeta = clamp(solver.proximalStepsizeBeta, 1.0e-8, 1.0e-2)
     msg = Printf.@sprintf("DOUBLY_LINEARIZED_SOLVER: given rho = %.2e, estimated alpha = %.2e, beta = %.2e \n", rho, solver.proximalStepsizeAlpha, solver.proximalStepsizeBeta)
     @PDMOWarn solver.logLevel msg 
 end 
