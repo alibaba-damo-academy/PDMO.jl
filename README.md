@@ -7,23 +7,24 @@ and
 ```
 julia PDMO.jl/advanced/warmup.jl
 ```
-for a one-time compilation. Then avigate into the project folder
+for a one-time compilation. Then navigate into the project folder
 ```
 cd PDMO.jl
 ```
+and use the following scripts for experiments presented in the paper. 
 
-## Section 4.1
-Download images from [here](https://cs.nyu.edu/~fergus/datasets/nyu_depth_v2.html), save image in ```advanced/src/ImageMinimalPartition/images```, and then run
+## Section 4.1 Depth Map Estimation
+Download images from [NYU Depth Dataset](https://cs.nyu.edu/~fergus/datasets/nyu_depth_v2.html), save images in ```advanced/src/ImageMinimalPartition/images```, and then run
 ```
 julia advanced/src/ImageMinimalPartition/TestImageMinimalPartition.jl 
 ```
-## Section 4.2
+## Section 4.2 Hyperspectral Image Unmixing
 Run 
 ```
 julia advanced/src/HyperspectralImageUnmixing/TestHyperspectralImageUnmixing.jl 
 ```
-## Section 4.3
-Download matrices by
+## Section 4.3 Simpler Synthetic Tasks
+Download matrices using the script
 ```
 julia applications/datasets/download_datasets.jl 
 ```
@@ -34,7 +35,7 @@ julia applications/DualLeastAbsoluteDeviation/TestDualLeastAbsoluteDeviation.jl
 julia applications/DualSVM/TestDualSVM.jl 
 ```
 
-Results will be saved into the folder ```results/```
+Results will be saved into the folder ```results/```.
 
 
 # PDMO.jl - **Primal-Dual Methods for Optimization**
