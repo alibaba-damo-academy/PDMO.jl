@@ -1,4 +1,38 @@
-# Codes for 
+# Codes for *ALiA: Adaptive Linearized ADMM*
+This branch provides codes for numerical results in the paper *ALiA: Adaptive Linearized ADMM* by Jang et al. To begin with, download the project folder. Then from where ```PDMO.jl``` is located, run 
+```
+julia PDMO.jl/warmup.jl
+``` 
+and 
+```
+julia PDMO.jl/advanced/warmup.jl
+```
+for a one-time compilation. Then navigate into the project folder
+```
+cd PDMO.jl
+```
+
+## Section 4.1
+Download images from [here](https://cs.nyu.edu/~fergus/datasets/nyu_depth_v2.html), and save image in```advanced/src/ImageMinimalPartition/images```. Then run 
+```
+julia advanced/src/ImageMinimalPartition/TestImageMinimalPartition.jl 
+```
+## Section 4.2
+Run 
+```
+julia advanced/src/HyperspectralImageUnmixing/TestHyperspectralImageUnmixing.jl 
+```
+## Section 4.3
+Download matrices by executing
+```
+julia applications/datasets/download_datasets.jl 
+```
+This will download files into ```applications/datasets/downloaded```. Then run the following three scripts:
+```
+julia applications/DualLasso/TestDualLasso.jl 
+julia applications/DualLeastAbsoluteDeviation/TestDualLeastAbsoluteDeviation.jl 
+julia applications/DualSVM/TestDualSVM.jl 
+```
 
 
 
