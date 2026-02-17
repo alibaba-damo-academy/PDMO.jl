@@ -1,5 +1,5 @@
 # Codes for *ALiA: Adaptive Linearized ADMM*
-This branch provides codes for numerical experiments in the paper *ALiA: Adaptive Linearized ADMM* by Jang et al. To begin with, download the project folder. Then from where ```PDMO.jl``` is located, run 
+This branch provides codes for numerical experiments in the paper *[ALiA: Adaptive Linearized ADMM](https://arxiv.org/abs/2602.15000)* by Jang et al. (2026). To begin with, download the project folder. Then from where ```PDMO.jl``` is located, run 
 ```
 julia PDMO.jl/warmup.jl
 ``` 
