@@ -44,6 +44,12 @@ julia applications/DualSVM/TestDualSVM.jl
 
 Results will be saved into the folder ```results/```.
 
+## Other Notes
+If you encounter the error `libgobject-2.0.so: undefined symbol: g_dir_unref`, plus Cairo/FFMPEG/Plots failing, try to run Julia without Conda’s environment variables.
+```
+conda deactivate
+unset LD_LIBRARY_PATH
+```
 
 # PDMO.jl - **Primal-Dual Methods for Optimization**
 
