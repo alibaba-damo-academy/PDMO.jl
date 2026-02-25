@@ -7,7 +7,7 @@ REMOTE_TEST = true
 if REMOTE_TEST == false
     # For local development
     PDMO_PATH = joinpath(@__DIR__, "..")              
-    HSL_PATH  = joinpath(PDMO_PATH, "..", "HSL_jll_placeholder")
+    HSL_PATH  = joinpath(PDMO_PATH, "HSL_jll_placeholder")
 else
     # For remote test, the script should be run from the dir where PDMO.jl is located
     PDMO_PATH = "PDMO.jl"
