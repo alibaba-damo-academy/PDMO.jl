@@ -66,7 +66,7 @@ n~\textbf{Block Variables} \quad & m~\textbf{ Block Constraints} \quad & \textbf
 ```
 
 More specifically, 
-- For each $j= 1,\cdots,n$, a `BlockVariable` $x_j$ represents a numeric array (i.e., scalar, vector, matrix, etc.), and is associated with two objective functions: 
+- For each $j = 1,\cdots,n$, a `BlockVariable` $x_j$ represents a numeric array (i.e., scalar, vector, matrix, etc.), and is associated with two objective functions: 
     - each $f_j$ is differentiable, and $f_j(\cdot)$ and $\nabla f_j(\cdot)$ are available; 
     - each $g_j$ is proximable, and $g_j(\cdot)$ and $\text{prox}_{\gamma g_j}(\cdot)$ are available.
 - For each $i = 1,\cdots,m$, a `BlockConstraint` is defined by some linear operators and a right-hand side array: 
