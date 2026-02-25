@@ -311,4 +311,68 @@ end
 
 
 
+function get_statistic_features(t)
+    arr = vec(t) 
+    min_ele = 1.0e30
+    max_ele = -1.0e30
+    nnz = 0 
+    sum_ele = 0.0
+    prod_ele = 1.0
+    
+    for ele in arr 
+        if ele < min_ele 
+            min_ele = ele 
+        end
+        
+        if ele > max_ele 
+            max_ele = ele 
+        end
+        
+        if abs(ele) > 1e-6 
+            nnz += 1 
+        end
 
+        sum_ele += log(abs(ele) + 1.0)
+        prod_ele *= log(abs(ele) + 1.0)
+    end
+    
+    mean_val = mean(arr)
+    std_val = std(arr)
+    var_val = var(arr)
+    mean_abs = mean(abs.(arr))
+    median_val = median(arr)
+    perc_25 = quantile(arr, 0.25)
+    perc_75 = quantile(arr, 0.75)
+    
+    return [mean_val, std_val, var_val, mean_abs, median_val, perc_25, perc_75, min_ele, max_ele, nnz, sum_ele, prod_ele]
+end
+
+function get_structure_features(t)
+    matrix = t
+    if size(matrix, 1) == size(matrix, 2)  
+        return [
+            rank(matrix), 
+            tr(matrix)     
+        ]
+    else  
+        diag_elements = diag(matrix)
+        diagonal_sum = sum(diag_elements)
+        return [
+            rank(matrix),  
+            diagonal_sum  
+        ]
+    end
+end
+
+function get_geometric_features(t)
+    matrix = t
+    return [
+        opnorm(matrix, 1),      
+        opnorm(matrix, 2),      
+        opnorm(matrix, Inf)     
+    ]
+end
+
+function get_random_features(i)
+    return [i, rand()]
+end

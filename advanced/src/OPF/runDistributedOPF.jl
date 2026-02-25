@@ -40,7 +40,11 @@ if abspath(PROGRAM_FILE) == @__FILE__
     r_value = length(ARGS) >= 9 ? parse(Float64, ARGS[9]) : 1.0e4
     seed = length(ARGS) >= 10 ? parse(Int, ARGS[10]) : 126
 
+    # gnn parameters
     gnn_force_cpu = true
+    gnn_use_onnx = false
+
+    # OPF-formulation parameters
     useCustomizedGeneratorCost = false
     mergeConstraints = false
     
@@ -129,7 +133,7 @@ if abspath(PROGRAM_FILE) == @__FILE__
     end
     push!(results, ("MILP", milp_result))
 
-    registerGnnBipartizationImpl!(; force_cpu = gnn_force_cpu, model_path = GNN_MODEL_PATH)
+    registerGnnBipartizationImpl!(; force_cpu = gnn_force_cpu, model_path = gnn_use_onnx ? GNN_ONNX_MODEL_PATH : GNN_MODEL_PATH)
     println("="^120)
     gnn_result = try
         testDistributedOPF(networkInfo,

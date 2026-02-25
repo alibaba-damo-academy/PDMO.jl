@@ -14,7 +14,7 @@ include(joinpath(@__DIR__, "..", "gnn", "GnnBipartization.jl"))
 function main(args)
 
     if length(args) < 1
-        error("Usage: julia -t 16 advanced/src/DistributedOpt/runDistributedOpt.jl numberNodes kappa n m")
+        error("Usage: julia -t 16 advanced/src/DistributedOpt/runDistributedOpt.jl numberNodes n m")
     end
 
     numberNodes = parse(Int, args[1])
@@ -29,7 +29,9 @@ function main(args)
     mipHeuristicEffort = length(args) >= 10 ? parse(Float64, args[10]) : 0.2
     mipTimeLimit = length(args) >= 11 ? parse(Float64, args[11]) : 60.0
     
+    # gnn parameters
     gnn_force_cpu = true
+    gnn_use_onnx = false
 
     Random.seed!(seed)
     
@@ -125,18 +127,21 @@ function main(args)
         println("="^60)
     end 
 
-    registerGnnBipartizationImpl!(; force_cpu = gnn_force_cpu, model_path = GNN_MODEL_PATH)
+
+    registerGnnBipartizationImpl!(; force_cpu = gnn_force_cpu, model_path = gnn_use_onnx ? GNN_ONNX_MODEL_PATH : GNN_MODEL_PATH)
     try
-        println("Solving distributed opt problem with GNN bipartization...")
+        gnn_label = gnn_use_onnx ? "GNN-ONNX" : "GNN-Pycall"
+        println("Solving distributed opt problem with $gnn_label bipartization...")
         param.solver = setSolver()
         result_gnn = runBipartiteADMM(mbp, param;
             bipartizationAlgorithm = GNN_BIPARTIZATION,
             saveSolutionInMultiblockProblem = false,
             tryJuMP = false)
-        push!(results, ("GNN", result_gnn))
+        push!(results, (gnn_label, result_gnn))
     catch e
         @error "Failed to solve the distributed opt problem with GNN bipartization." exception=(e, catch_backtrace())
     end
+
 
     println("="^60)
     println("SUMMARY OF RESULTS")
