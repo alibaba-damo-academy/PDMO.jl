@@ -24,7 +24,7 @@ function saveJSONL(info , method_name, folder_name)
                 "obj"      => info.obj[i],
                 "alObj"    => info.alObj[i],
             )
-            println(io, JSON.json(rec))
+            println(io, JSON.json(rec; allownan=true))
         end
     end
 end
@@ -44,7 +44,7 @@ function saveJSONL_adapdm(info , method_name, folder_name)
                 "presLInf" => info.presLInf[i],
                 "dresLInf" => info.dresLInf[i],
             )
-            println(io, JSON.json(rec))
+            println(io, JSON.json(rec; allownan=true))
         end
     end
 end
@@ -60,7 +60,7 @@ function load_run(path)
     presLInf  = Float64[]
     dresLInf  = Float64[]
     for line in eachline(path)
-        rec = JSON.parse(line)
+        rec = JSON.parse(line; allownan=true)
         push!(iters,  rec["iter"])
         push!(presL2, Inffilter(rec["presL2"]))
         push!(dresL2, Inffilter(rec["dresL2"]))
