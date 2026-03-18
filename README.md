@@ -1,3 +1,97 @@
+# Codes for *Automating Reformulation for Parallel ADMM*
+This branch provides codes for numerical experiments in the paper *Automating Reformulation for Parallel ADMM* by Sun et al. (2026). To begin with, download the project folder and checkout the current branch. 
+```
+cd PDMO.jl 
+git checkout test/reformulation 
+cd ..
+```
+The from where `PDMO.jl` is located, run 
+```
+julia PDMO.jl/warmup.jl
+```
+and 
+```
+julia PDMO.jl/advanced/warmup.jl
+```
+for a one-tine compilation. 
+
+## Section 1: Circuit Demo
+Run the following commands to generate three plots in Fig. 1. 
+```
+julia PDMO.jl/applications/Demo/demo.jl --rho 1 --k 10000
+julia PDMO.jl/applications/Demo/demo.jl --rho 10 --k 1000
+julia PDMO.jl/applications/Demo/demo.jl --rho 100 --k 100
+```
+Plots will be saved under `PDMO.jl/applications/Demo/`. 
+
+## Section 3.1 Linear Program: A Case Study 
+Run the following commands to generate plots in Section 3.1
+```
+julia PDMO.jl/applications/GenericLP/inspect_cocluster.jl /PATH/TO/enlight_hard.mps.gz
+julia PDMO.jl/applications/GenericLP/enlight_hard_demo.jl /PATH/TO/enlight_hard.mps.gz 
+```
+
+## Section 3.2 Linear Program: The Network Flow Problem 
+We use the following script `PDMO.jl/advanced/src/NetworkFlow/runNetworkFlowProblem.jl` to produce results presented in Section 3.2. Example usage: 
+
+```
+./julia/run.sh -t 16 PDMO.jl/advanced/src/NetworkFlow/runNetworkFlowProblem.jl  --solver original --maxIter 100000 --initialRho 1.0 --timeLimit 3600.0 --seed 1 --logInterval 1000 --random 300 2000 
+```
+where 
+- `--random <nodes> <arcs>`: Generate a random feasible instance
+- `--solver <original|doubly|adaptive>`: ADMM subproblem solver (default: `original`)
+- `--maxIter <int>`: ADMM max iterations (default: `10000`)
+- `--initialRho <float>`: Initial rho (default: `10.0`)
+- `--timeLimit <float>`: Max wall-clock time in seconds (default: `3600.0`)
+
+The script used to generate Fig. 11 in the paper is available upon request. 
+
+## Section 3.3 Distributed DC Optimal Power Flow
+We use the script `PDMO.jl/advanced/src/OPF/runDistributedOPF.jl` to produce results presented in Section 3.3. Example usage: 
+```
+./julia -t 16 PDMO.jl/advanced/src/OPF/runDistributedOPF.jl /PATH/TO/case30.m 3 original 100.0 
+```
+where the arguments are: 
+- `ARGS[1]` -> `matpower_path` (required): Absolute path to the MATPOWER case file.
+- `ARGS[2]` -> `numberPartitions` (default: `3`): Number of partitions.
+- `ARGS[3]` -> `admmSolver` (default: `original`): ADMM solver variant.
+- `ARGS[4]` -> `initialRho` (default: `10.0`): Initial penalty parameter.
+- `ARGS[5]` -> `tol` (default: `1.0e-4`): Convergence tolerance.
+- `ARGS[6]` -> `maxIter` (default: `1000000`): Maximum number of iterations.
+- `ARGS[7]` -> `timeLimit` (default: `7200.0`): Time limit in seconds.
+- `ARGS[8]` -> `logInterval` (default: `100`): Iteration interval for logging.
+- `ARGS[9]` -> `r_value` (default: `1.0e4`): `r` parameter value.
+- `ARGS[10]` -> `seed` (default: `126`): Random seed.
+
+The script used to generate Fig. 13 and Fig. 14 in the paper is available upon request. 
+
+## Section 3.4 Decentralized Consensus Optimization 
+We use the script  `PDMO.jl/advanced/src/DistributedOpt/runDistributedOpt.jl` to produce results presented in Section 3.4. Example usage:
+```
+./julia/run.sh -t 16 PDMO.jl/advanced/src/DistributedOpt/runDistributedOpt.jl 100 500 250 original 10.0 100000 1000 111
+```
+where the arguments are 
+- `args[1]` -> `numberNodes` (required): Number of nodes.
+- `args[2]` -> `n` (required): Problem size parameter `n`.
+- `args[3]` -> `m` (required): Problem size parameter `m`.
+- `args[4]` -> `solver_name` (default: `original`): Solver variant.
+- `args[5]` -> `initialRho` (default: `10.0`): Initial penalty parameter.
+- `args[6]` -> `maxIter` (default: `100000`): Maximum ADMM iterations.
+- `args[7]` -> `logInterval` (default: `1000`): Logging interval (in iterations).
+- `args[8]` -> `seed` (default: `126`): Random seed.
+- `args[9]` -> `mipRelGap` (default: `0.01`): Relative MIP optimality gap.
+- `args[10]` -> `mipHeuristicEffort` (default: `0.2`): MIP heuristic effort.
+- `args[11]` -> `mipTimeLimit` (default: `60.0`): Time limit for MIP solve (seconds).
+
+The script used to generate Table 1, Fig. 15, and Fig. 16 in the paper is available upon request. 
+
+## Other Notes
+If you encounter the error `libgobject-2.0.so: undefined symbol: g_dir_unref`, plus Cairo/FFMPEG/Plots failing, try to run Julia without Conda’s environment variables.
+```
+conda deactivate
+unset LD_LIBRARY_PATH
+```
+
 # PDMO.jl - **Primal-Dual Methods for Optimization**
 
 ## Overview
