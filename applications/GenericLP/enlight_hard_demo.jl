@@ -1,23 +1,69 @@
 # include(joinpath(@__DIR__, "../../warmup.jl"))
 import Pkg
-Pkg.activate(joinpath(@__DIR__, "..", ".."))
+
+const SCRIPT_DIR = @__DIR__
+const LEGACY_ENV_DIR = joinpath(SCRIPT_DIR, "legacy_env")
+const REPO_ROOT = normpath(joinpath(SCRIPT_DIR, "..", ".."))
+
+function setup_and_activate_legacy_env()
+    # Conda-injected LD_LIBRARY_PATH can break JLL runtime loading.
+    if haskey(ENV, "LD_LIBRARY_PATH")
+        ld_path = lowercase(ENV["LD_LIBRARY_PATH"])
+        if occursin("conda", ld_path) || occursin("anaconda", ld_path)
+            # Re-exec once with a clean library path when run as a script.
+            if abspath(PROGRAM_FILE) == abspath(@__FILE__) && get(ENV, "PDMO_LEGACY_REEXEC", "0") != "1"
+                cmd_parts = copy(Base.julia_cmd().exec)
+                append!(cmd_parts, [abspath(@__FILE__); ARGS])
+                cmd = addenv(Cmd(cmd_parts),
+                    "LD_LIBRARY_PATH" => "",
+                    "PDMO_LEGACY_REEXEC" => "1")
+                proc = run(ignorestatus(cmd))
+                exit(proc.exitcode)
+            end
+            delete!(ENV, "LD_LIBRARY_PATH")
+        end
+    end
+
+    project_file = joinpath(LEGACY_ENV_DIR, "Project.toml")
+    isfile(project_file) || error("Missing legacy environment at $(project_file)")
+
+    Pkg.activate(LEGACY_ENV_DIR)
+    # Ensure local PDMO is used in this script-local environment.
+    Pkg.develop(path=REPO_ROOT)
+    # Always instantiate: works both with and without Manifest.toml.
+    Pkg.instantiate()
+end
+
+setup_and_activate_legacy_env()
 
 include(joinpath(@__DIR__, "GenericLP.jl"))
+include(joinpath(@__DIR__, "inspect_cocluster.jl"))
 
 using PDMO
 
 using LinearAlgebra
 using SparseArrays
 using Random
-using Plots
+using PyPlot
 using Printf
-using LaTeXStrings
 using JuMP 
 import MathOptInterface 
 using Ipopt
 using HiGHS
 
 Random.seed!(126)
+
+const DEFAULT_OUTPUT_DIR = joinpath(@__DIR__, "enlight_hard_plots")
+
+function usage()
+    println("""
+Usage:
+    julia applications/GenericLP/enlight_hard_demo.jl <mps_path> [output_dir]
+
+Defaults:
+    output_dir = applications/GenericLP/enlight_hard_plots
+""")
+end
 
 function _plot_residuals(results::AbstractDict, field::Symbol, title_text::String, outfile::String; k::Int=1)
     labels = Dict(
@@ -36,7 +82,7 @@ function _plot_residuals(results::AbstractDict, field::Symbol, title_text::Strin
         "BFS" => :orange,
     )
 
-    plt = plot(size=(640, 400))
+    fig, ax = subplots(figsize=(6.4, 4.0))
     all_vals = Float64[]
     for key in ["Basic", "MILP", "BFS"]
         res = get(results, key, nothing)
@@ -46,33 +92,46 @@ function _plot_residuals(results::AbstractDict, field::Symbol, title_text::Strin
         stride = max(1, k)
         iters = collect(1:stride:length(series))
         vals = series[iters]
+        if field == :dresL2 && !isempty(vals)
+            # The first stored dres entry corresponds to iter 0 and may be Inf.
+            iters = iters[2:end]
+            vals = vals[2:end]
+        end
+        isempty(vals) && continue
         yvals = [v > 0 ? log10(v) : NaN for v in vals]
         append!(all_vals, yvals)
-        plot!(
-            plt,
-            iters,
-            yvals,
+        style = linestyles[key] == :solid ? "-" : linestyles[key] == :dash ? "--" : ":"
+        ax.plot(iters, yvals;
             label=labels[key],
-            linestyle=linestyles[key],
-            color=colors[key],
-            linewidth=2.5,
-        )
+            linestyle=style,
+            color=string(colors[key]),
+            linewidth=2.5)
     end
 
-    xlabel!(plt, "Iteration")
+    ax.set_xlabel("Iteration")
     if field == :presL2
-        ylabel!(plt, L"\log_{10}(||\mathrm{Pres}||_2)")
+        ax.set_ylabel("log10(||Pres||_2)")
     else
-        ylabel!(plt, L"\log_{10}(||\mathrm{Dres}||_2)")
+        ax.set_ylabel("log10(||Dres||_2)")
     end
-    # title!(plt, title_text)
-    if !isempty(all_vals)
-        ymin = minimum(all_vals)
-        ymax = maximum(all_vals)
-        plot!(plt, ylims=(ymin, ymax))
+    ax.set_title(title_text)
+    finite_vals = filter(isfinite, all_vals)
+    if !isempty(finite_vals)
+        ymin = minimum(finite_vals)
+        ymax = maximum(finite_vals)
+        if ymin == ymax
+            # Avoid invalid/singular axis ranges when residuals are constant.
+            pad = max(abs(ymin) * 0.05, 1e-6)
+            ax.set_ylim(ymin - pad, ymax + pad)
+        else
+            ax.set_ylim(ymin, ymax)
+        end
     end
-    plot!(plt, legend=:best, grid=true)
-    savefig(plt, outfile)
+    ax.grid(true)
+    ax.legend(loc="best")
+    fig.tight_layout()
+    fig.savefig(outfile, dpi=200)
+    close(fig)
     println("[info] saved plot -> $(outfile)")
 end
 
@@ -84,7 +143,10 @@ if abspath(PROGRAM_FILE) == @__FILE__
     end
 
     mps_path   = abspath(ARGS[1])
-    outdir = length(ARGS) >= 2 ? ARGS[2] :  @__DIR__
+    outdir = length(ARGS) >= 2 ? ARGS[2] : DEFAULT_OUTPUT_DIR
+    isdir(outdir) || mkpath(outdir)
+
+    inspect_cocluster(mps_path; output_dir=outdir, k=6, iters=5, forceSplit=true)
 
     lp = GenericLP(mps_path)
 

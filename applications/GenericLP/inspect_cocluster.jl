@@ -1,6 +1,32 @@
 #!/usr/bin/env julia
-import Pkg
-Pkg.activate(joinpath(@__DIR__, "../../"))
+if abspath(PROGRAM_FILE) == @__FILE__
+    import Pkg
+    legacy_env_dir = joinpath(@__DIR__, "legacy_env")
+    repo_root = normpath(joinpath(@__DIR__, "..", ".."))
+    project_file = joinpath(legacy_env_dir, "Project.toml")
+    isfile(project_file) || error("Missing legacy environment at $(project_file)")
+
+    if haskey(ENV, "LD_LIBRARY_PATH")
+        ld_path = lowercase(ENV["LD_LIBRARY_PATH"])
+        if occursin("conda", ld_path) || occursin("anaconda", ld_path)
+            if get(ENV, "PDMO_LEGACY_REEXEC", "0") != "1"
+                cmd_parts = copy(Base.julia_cmd().exec)
+                append!(cmd_parts, [abspath(@__FILE__); ARGS])
+                cmd = addenv(Cmd(cmd_parts),
+                    "LD_LIBRARY_PATH" => "",
+                    "PDMO_LEGACY_REEXEC" => "1")
+                proc = run(ignorestatus(cmd))
+                exit(proc.exitcode)
+            end
+            delete!(ENV, "LD_LIBRARY_PATH")
+        end
+    end
+
+    Pkg.activate(legacy_env_dir)
+    Pkg.develop(path=repo_root)
+    # Always instantiate: works both with and without Manifest.toml.
+    Pkg.instantiate()
+end
 
 using PDMO
 using LinearAlgebra
@@ -311,6 +337,8 @@ function inspect_cocluster(mps_path::AbstractString;
     println("Saved block assignments to ", cluster_info)
 end
 
+const DEFAULT_OUTPUT_DIR = joinpath(@__DIR__, "enlight_hard_plots")
+
 # CLI entry point
 if abspath(PROGRAM_FILE) == @__FILE__
     function usage()
@@ -319,7 +347,7 @@ Usage:
     julia applications/GenericLP/inspect_cocluster.jl <mps_path> [output_dir] [k] [iters] [forceSplit]
 
 Defaults:
-    output_dir = .
+    output_dir = applications/GenericLP/enlight_hard_plots
     k          = 6
     iters      = 5
     forceSplit = true
@@ -331,7 +359,7 @@ Defaults:
         exit(1)
     end
     mps_path   = abspath(ARGS[1])
-    output_dir = length(ARGS) >= 2 ? ARGS[2] : @__DIR__
+    output_dir = length(ARGS) >= 2 ? ARGS[2] : DEFAULT_OUTPUT_DIR
     k          = length(ARGS) >= 3 ? parse(Int, ARGS[3]) : 6
     iters      = length(ARGS) >= 4 ? parse(Int, ARGS[4]) : 5
     forceSplit = length(ARGS) >= 5 ? lowercase(ARGS[5]) in ("true","1","yes","y") : true
