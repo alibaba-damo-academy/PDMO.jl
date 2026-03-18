@@ -25,9 +25,8 @@ julia PDMO.jl/applications/Demo/demo.jl --rho 100 --k 100
 Plots will be saved under `PDMO.jl/applications/Demo/`. 
 
 ## Section 3.1 Linear Program: A Case Study 
-Run the following commands to generate plots in Section 3.1
+Run the following command to generate plots in Section 3.1
 ```
-julia PDMO.jl/applications/GenericLP/inspect_cocluster.jl /PATH/TO/enlight_hard.mps.gz
 julia PDMO.jl/applications/GenericLP/enlight_hard_demo.jl /PATH/TO/enlight_hard.mps.gz 
 ```
 
