@@ -157,10 +157,16 @@ function generateGenericLP(lp::GenericLP)
 end 
 
 
-function heuristic_coclustering(A::SparseMatrixCSC{<:Real,Int}, k::Int; iters::Int=10, rng::AbstractRNG=MersenneTwister(42), forceSplitSingleBlock::Bool=true)
+function heuristic_coclustering(A::SparseMatrixCSC{<:Real,Int}, k::Int;
+    iters::Int=10,
+    rng::AbstractRNG=MersenneTwister(42),
+    forceSplitSingleBlock::Bool=true,
+    promotePairwiseRows::Bool=false)
     m, n = size(A)
-    k = max(1, k)
-    # Initialize column blocks in a round-robin (deterministic) way
+    n == 0 && return Int[], Int[]
+    k = min(max(1, k), n)
+
+    # Initialize column blocks in a round-robin (deterministic) way, then shuffle
     col_block = [mod(j-1, k) + 1 for j in 1:n]
     # Shuffle for better starting diversity
     shuffle!(rng, col_block)
@@ -185,10 +191,40 @@ function heuristic_coclustering(A::SparseMatrixCSC{<:Real,Int}, k::Int; iters::I
         col_to_rows[j] = A.colptr[j]:(A.colptr[j+1]-1)
     end
 
+    # Track current column block sizes for load-balanced tie breaking.
+    col_block_sizes = zeros(Int, k)
+    @inbounds for j in 1:n
+        col_block_sizes[col_block[j]] += 1
+    end
+
+    # Deterministic tie breaker:
+    # 1) larger support count, 2) smaller block size, 3) keep previous block, 4) smaller block id.
+    pick_block = function(counts::Vector{Int}, block_sizes::Vector{Int}, prev::Int)
+        best_b = 1
+        best_cnt = counts[1]
+        best_sz = block_sizes[1]
+        for b in 2:length(counts)
+            cb = counts[b]
+            sb = block_sizes[b]
+            if cb > best_cnt ||
+               (cb == best_cnt && (sb < best_sz ||
+               (sb == best_sz && (b == prev && best_b != prev ||
+               (b != prev && best_b != prev && b < best_b)))))
+                best_b = b
+                best_cnt = cb
+                best_sz = sb
+            end
+        end
+        return best_b
+    end
+
     # Main alternation
     counts_row = zeros(Int, k)
     counts_col = zeros(Int, k)
+    next_col_block = similar(col_block)
+    next_col_sizes = zeros(Int, k)
     for _ in 1:iters
+        row_changed = 0
         # Assign rows to the block that covers most of its nonzeros
         @inbounds for i in 1:m
             fill!(counts_row, 0)
@@ -197,23 +233,25 @@ function heuristic_coclustering(A::SparseMatrixCSC{<:Real,Int}, k::Int; iters::I
                 b = col_block[j]
                 counts_row[b] += 1
             end
-            # if a row is empty, keep previous or assign 1
+            old_b = row_block[i]
             if isempty(cols_i)
-                row_block[i] = 1
+                row_block[i] = old_b
             else
-                # tie-breaker: smallest block id with max count
-                maxc = -1
-                argb = 1
-                for b in 1:k
-                    if counts_row[b] > maxc
-                        maxc = counts_row[b]
-                        argb = b
-                    end
-                end
-                row_block[i] = argb
+                row_block[i] = pick_block(counts_row, col_block_sizes, old_b)
+            end
+            if row_block[i] != old_b
+                row_changed += 1
             end
         end
 
+        # Row block sizes are used to stabilize column assignment.
+        row_block_sizes = zeros(Int, k)
+        @inbounds for i in 1:m
+            row_block_sizes[row_block[i]] += 1
+        end
+
+        col_changed = 0
+        fill!(next_col_sizes, 0)
         # Reassign columns to the block most represented among its incident rows
         @inbounds for j in 1:n
             fill!(counts_col, 0)
@@ -222,21 +260,111 @@ function heuristic_coclustering(A::SparseMatrixCSC{<:Real,Int}, k::Int; iters::I
                 b = row_block[i]
                 counts_col[b] += 1
             end
-            # if a column is empty, keep previous or assign 1
+            old_b = col_block[j]
             if A.colptr[j] == A.colptr[j+1]
-                col_block[j] = 1
+                next_col_block[j] = old_b
             else
-                maxc = -1
-                argb = 1
-                for b in 1:k
-                    if counts_col[b] > maxc
-                        maxc = counts_col[b]
-                        argb = b
-                    end
-                end
-                col_block[j] = argb
+                next_col_block[j] = pick_block(counts_col, row_block_sizes, old_b)
+            end
+            next_col_sizes[next_col_block[j]] += 1
+            if next_col_block[j] != old_b
+                col_changed += 1
             end
         end
+
+        # Repair empty column blocks to avoid collapse/degeneracy.
+        empties = [b for b in 1:k if next_col_sizes[b] == 0]
+        if !isempty(empties)
+            # Deterministically pick high-degree columns from largest donor blocks.
+            deg = [A.colptr[j+1] - A.colptr[j] for j in 1:n]
+            donor_order = sortperm(collect(1:k); by = b -> (-next_col_sizes[b], b))
+            for empty_b in empties
+                moved = false
+                for donor in donor_order
+                    next_col_sizes[donor] <= 1 && continue
+                    best_j = 0
+                    best_deg = -1
+                    @inbounds for j in 1:n
+                        if next_col_block[j] == donor && deg[j] > best_deg
+                            best_deg = deg[j]
+                            best_j = j
+                        end
+                    end
+                    if best_j != 0
+                        next_col_block[best_j] = empty_b
+                        next_col_sizes[donor] -= 1
+                        next_col_sizes[empty_b] += 1
+                        moved = true
+                        break
+                    end
+                end
+                moved || break
+            end
+        end
+
+        col_block .= next_col_block
+        col_block_sizes .= next_col_sizes
+
+        # Optional refinement: encourage each row to touch at most two column blocks
+        # by reassigning minor-block columns to the two dominant row blocks.
+        if promotePairwiseRows
+            fill!(col_block_sizes, 0)
+            @inbounds for j in 1:n
+                col_block_sizes[col_block[j]] += 1
+            end
+            @inbounds for i in 1:m
+                cols_i = row_to_cols[i]
+                isempty(cols_i) && continue
+                fill!(counts_row, 0)
+                for j in cols_i
+                    counts_row[col_block[j]] += 1
+                end
+                active = Int[]
+                for b in 1:k
+                    counts_row[b] > 0 && push!(active, b)
+                end
+                length(active) <= 2 && continue
+                sort!(active; by = b -> (-counts_row[b], b))
+                keep1 = active[1]
+                keep2 = active[2]
+                for j in cols_i
+                    bj = col_block[j]
+                    if bj != keep1 && bj != keep2
+                        new_b = counts_row[keep1] >= counts_row[keep2] ? keep1 : keep2
+                        col_block_sizes[bj] -= 1
+                        col_block[j] = new_b
+                        col_block_sizes[new_b] += 1
+                    end
+                end
+            end
+            # Repair accidental empties after pairwise projection.
+            empties = [b for b in 1:k if col_block_sizes[b] == 0]
+            if !isempty(empties)
+                deg = [A.colptr[j+1] - A.colptr[j] for j in 1:n]
+                donor_order = sortperm(collect(1:k); by = b -> (-col_block_sizes[b], b))
+                for empty_b in empties
+                    for donor in donor_order
+                        col_block_sizes[donor] <= 1 && continue
+                        best_j = 0
+                        best_deg = -1
+                        for j in 1:n
+                            if col_block[j] == donor && deg[j] > best_deg
+                                best_deg = deg[j]
+                                best_j = j
+                            end
+                        end
+                        best_j == 0 && continue
+                        col_block[best_j] = empty_b
+                        col_block_sizes[donor] -= 1
+                        col_block_sizes[empty_b] += 1
+                        break
+                    end
+                end
+            end
+        end
+
+        # Fixed point reached.
+        (row_changed == 0 && col_changed == 0) && break
     end
 
     # Fallback: if all columns collapsed into a single block, enforce a multi-block split
@@ -463,12 +591,29 @@ function buildCoClusterLayout(lp::GenericLP, row_block::Vector{Int}, col_block::
 end
 
 
-function generateGenericLPWithCoClustering(lp::GenericLP; k::Int=6, iters::Int=5, rng::AbstractRNG=MersenneTwister(42), forceSplitSingleBlock::Bool=true, return_layout::Bool=false)
-    # 1) Co-cluster rows/cols on the sparsity pattern of A
-    row_block, col_block = heuristic_coclustering(lp.A, k; iters=iters, rng=rng, forceSplitSingleBlock=forceSplitSingleBlock)
-
+function generateGenericLPFromCoClustering(lp::GenericLP, row_block::Vector{Int}, col_block::Vector{Int};
+    k::Int=maximum(col_block),
+    group_rows_override::Union{Nothing,Vector{Vector{Int}}}=nothing,
+    group_blocks_override::Union{Nothing,Vector{Vector{Int}}}=nothing,
+    return_layout::Bool=false)
     m = lp.number_rows
     layout = buildCoClusterLayout(lp, row_block, col_block; k=k)
+    if group_rows_override !== nothing || group_blocks_override !== nothing
+        group_rows_override !== nothing && group_blocks_override !== nothing ||
+            error("Both group_rows_override and group_blocks_override are required together.")
+        length(group_rows_override) == length(group_blocks_override) ||
+            error("group_rows_override and group_blocks_override must have the same length.")
+        layout = CoClusterLayout(
+            layout.row_block,
+            layout.col_block,
+            layout.cols_in_block,
+            layout.rows_touched_by_block,
+            layout.row_to_cols,
+            group_rows_override,
+            group_blocks_override,
+            layout.k_cols,
+        )
+    end
     cols_in_block = layout.cols_in_block
     rows_touched_by_block = layout.rows_touched_by_block
     row_to_cols = layout.row_to_cols
@@ -529,15 +674,17 @@ function generateGenericLPWithCoClustering(lp::GenericLP; k::Int=6, iters::Int=5
         all_eq = all(lp.row_lower[i] == lp.row_upper[i] for i in Rr)
         constr = BlockConstraint(r)
 
-        candidate_blocks = Vector{Int}()
-        seen_b = zeros(Int, k_cols)
-        mark_b = r
-        @inbounds for i in Rr
-            for j in row_to_cols[i]
-                b = col_block[j]
-                if seen_b[b] != mark_b
-                    seen_b[b] = mark_b
-                    push!(candidate_blocks, b)
+        candidate_blocks = group_blocks_override === nothing ? Vector{Int}() : copy(layout.group_blocks[r])
+        if group_blocks_override === nothing
+            seen_b = zeros(Int, k_cols)
+            mark_b = r
+            @inbounds for i in Rr
+                for j in row_to_cols[i]
+                    b = col_block[j]
+                    if seen_b[b] != mark_b
+                        seen_b[b] = mark_b
+                        push!(candidate_blocks, b)
+                    end
                 end
             end
         end
@@ -545,14 +692,16 @@ function generateGenericLPWithCoClustering(lp::GenericLP; k::Int=6, iters::Int=5
         for b in candidate_blocks
             Jb = cols_in_block[b]
             isempty(Jb) && continue
-            has_intersection = false
-            @inbounds for i in rows_touched_by_block[b]
-                if row_mark[i] == mark_id
-                    has_intersection = true
-                    break
+            if group_blocks_override === nothing
+                has_intersection = false
+                @inbounds for i in rows_touched_by_block[b]
+                    if row_mark[i] == mark_id
+                        has_intersection = true
+                        break
+                    end
                 end
+                has_intersection || continue
             end
-            has_intersection || continue
             subA = get_submatrix(Rr, Jb)
             addBlockMappingToConstraint!(constr, "x_$b", LinearMappingMatrix(subA))
         end
@@ -572,5 +721,21 @@ function generateGenericLPWithCoClustering(lp::GenericLP; k::Int=6, iters::Int=5
     end
 
     return return_layout ? (mbp, layout) : mbp
-end 
+end
+
+function generateGenericLPWithCoClustering(lp::GenericLP;
+    k::Int=6,
+    iters::Int=5,
+    rng::AbstractRNG=MersenneTwister(42),
+    forceSplitSingleBlock::Bool=true,
+    promotePairwiseRows::Bool=false,
+    return_layout::Bool=false)
+    # 1) Co-cluster rows/cols on the sparsity pattern of A
+    row_block, col_block = heuristic_coclustering(lp.A, k;
+        iters=iters,
+        rng=rng,
+        forceSplitSingleBlock=forceSplitSingleBlock,
+        promotePairwiseRows=promotePairwiseRows)
+    return generateGenericLPFromCoClustering(lp, row_block, col_block; k=k, return_layout=return_layout)
+end
 
