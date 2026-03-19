@@ -104,7 +104,7 @@ function _plot_residuals(results::AbstractDict, field::Symbol, title_text::Strin
     ax.grid(true)
     ax.legend(loc="best")
     fig.tight_layout()
-    fig.savefig(outfile, dpi=200)
+    fig.savefig(outfile, dpi=200, bbox_inches="tight", pad_inches=0.03)
     close(fig)
     println("[info] saved plot -> $(outfile)")
 end
@@ -235,6 +235,18 @@ function _edge_label_xy(x1::Float64, y1::Float64, x2::Float64, y2::Float64, labe
     return xm, ym
 end
 
+function _set_centered_axis_limits!(ax, pos::Dict{String, Tuple{Float64, Float64}}; xpad::Float64=0.20, ypad::Float64=0.12)
+    if isempty(pos)
+        return
+    end
+    xs = [xy[1] for xy in values(pos)]
+    ys = [xy[2] for xy in values(pos)]
+    xmin, xmax = minimum(xs), maximum(xs)
+    ymin, ymax = minimum(ys), maximum(ys)
+    ax.set_xlim(xmin - xpad, xmax + xpad)
+    ax.set_ylim(ymin - ypad, ymax + ypad)
+end
+
 function _plot_original_cocluster_graph(mbp::MultiblockProblem, outfile::String)
     variable_nodes = sort([string(b.id) for b in mbp.blocks if !startswith(string(b.id), "s_")])
     constraint_nodes = Set{String}()
@@ -307,20 +319,19 @@ function _plot_original_cocluster_graph(mbp::MultiblockProblem, outfile::String)
     for n in left_nodes
         x, y = pos[n]
         node_color = startswith(n, "C") ? "#90ee90" : "#8ecae6"
-        ax.scatter([x], [y], s=860, c=node_color, edgecolors="#333333", linewidths=1.0, zorder=3)
+        ax.scatter([x], [y], s=2160, c=node_color, edgecolors="#333333", linewidths=1.0, zorder=3)
         ax.text(x, y, _latex_symbol_label(n), ha="center", va="center", fontsize=10, zorder=4)
     end
     for n in right_nodes
         x, y = pos[n]
         node_color = startswith(n, "C") ? "#90ee90" : "#8ecae6"
-        ax.scatter([x], [y], s=860, c=node_color, edgecolors="#333333", linewidths=1.0, zorder=3)
+        ax.scatter([x], [y], s=2160, c=node_color, edgecolors="#333333", linewidths=1.0, zorder=3)
         ax.text(x, y, _latex_symbol_label(n), ha="center", va="center", fontsize=10, zorder=4)
     end
-    ax.set_xlim(-0.12, 0.84)
-    ax.set_ylim(0.02, 0.98)
+    _set_centered_axis_limits!(ax, pos; xpad=0.24, ypad=0.14)
     ax.axis("off")
     fig.tight_layout()
-    fig.savefig(outfile, dpi=200)
+    fig.savefig(outfile, dpi=200, bbox_inches="tight", pad_inches=0.03)
     close(fig)
     println("[info] saved graph -> $(outfile)")
 end
@@ -356,19 +367,18 @@ function _plot_admm_bipartized_graph(admm_graph::ADMMBipartiteGraph, outfile::St
 
     for node in left_nodes
         x, y = pos[node]
-        ax.scatter([x], [y], s=760, c=_node_color(node), edgecolors="#333333", linewidths=1.0, zorder=3)
+        ax.scatter([x], [y], s=1960, c=_node_color(node), edgecolors="#333333", linewidths=1.0, zorder=3)
         ax.text(x, y, _latex_symbol_label(label_cache[node]), ha="center", va="center", fontsize=9, zorder=4)
     end
     for node in right_nodes
         x, y = pos[node]
-        ax.scatter([x], [y], s=760, c=_node_color(node), edgecolors="#333333", linewidths=1.0, zorder=3)
+        ax.scatter([x], [y], s=1960, c=_node_color(node), edgecolors="#333333", linewidths=1.0, zorder=3)
         ax.text(x, y, _latex_symbol_label(label_cache[node]), ha="center", va="center", fontsize=9, zorder=4)
     end
-    ax.set_xlim(-0.12, 0.84)
-    ax.set_ylim(0.02, 0.98)
+    _set_centered_axis_limits!(ax, pos; xpad=0.24, ypad=0.14)
     ax.axis("off")
     fig.tight_layout()
-    fig.savefig(outfile, dpi=200)
+    fig.savefig(outfile, dpi=200, bbox_inches="tight", pad_inches=0.03)
     close(fig)
     println("[info] saved graph -> $(outfile)")
 end

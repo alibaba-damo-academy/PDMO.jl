@@ -140,7 +140,7 @@ function inspect_cocluster(mps_path::AbstractString;
 
     raw_path = joinpath(out_dir, "matrix_original.png")
     fig_original = plot_spy(A; title_str="")
-    fig_original.savefig(raw_path, dpi=200)
+    fig_original.savefig(raw_path, dpi=200, bbox_inches="tight", pad_inches=0.03)
     close(fig_original)
     println("Saved original matrix plot to ", raw_path)
 
@@ -150,7 +150,7 @@ function inspect_cocluster(mps_path::AbstractString;
         group_row_spans=group_row_spans, group_row_ids=group_row_ids,
         block_col_spans=block_col_spans, group_block_ids=group_block_ids,
         show_clusters=true, title_str="")
-    fig_clustered.savefig(clus_path, dpi=200)
+    fig_clustered.savefig(clus_path, dpi=200, bbox_inches="tight", pad_inches=0.03)
     close(fig_clustered)
     println("Saved coclustered matrix plot with block boundaries to ", clus_path)
 
@@ -194,7 +194,7 @@ function inspect_cocluster(mps_path::AbstractString;
         end
         grp_path = joinpath(out_dir, "matrix_coclustered_group_$r.png")
         fig_grp.tight_layout()
-        fig_grp.savefig(grp_path, dpi=200)
+        fig_grp.savefig(grp_path, dpi=200, bbox_inches="tight", pad_inches=0.03)
         close(fig_grp)
         println("Saved constraint-specific plot to ", grp_path)
 
@@ -253,7 +253,7 @@ function inspect_cocluster(mps_path::AbstractString;
         fig_stack.tight_layout(h_pad=0.05)
         fig_stack.subplots_adjust(hspace=0.02)
         stack_path = joinpath(out_dir, "matrix_coclustered_stacked.png")
-        fig_stack.savefig(stack_path, dpi=200)
+        fig_stack.savefig(stack_path, dpi=200, bbox_inches="tight", pad_inches=0.03)
         close(fig_stack)
         println("Saved stacked constraint plot to ", stack_path)
     end
@@ -282,7 +282,7 @@ function inspect_cocluster(mps_path::AbstractString;
             ax.axhline(r - 0.5; color="black", linewidth=0.4, alpha=0.5)
         end
         fig_coup.tight_layout()
-        fig_coup.savefig(coup_path, dpi=200)
+        fig_coup.savefig(coup_path, dpi=200, bbox_inches="tight", pad_inches=0.03)
         close(fig_coup)
         println("Saved block coupling heatmap to ", coup_path)
     end
