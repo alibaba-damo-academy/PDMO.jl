@@ -1,30 +1,9 @@
 #!/usr/bin/env julia
 if abspath(PROGRAM_FILE) == @__FILE__
     import Pkg
-    legacy_env_dir = joinpath(@__DIR__, "legacy_env")
     repo_root = normpath(joinpath(@__DIR__, "..", ".."))
-    project_file = joinpath(legacy_env_dir, "Project.toml")
-    isfile(project_file) || error("Missing legacy environment at $(project_file)")
-
-    if haskey(ENV, "LD_LIBRARY_PATH")
-        ld_path = lowercase(ENV["LD_LIBRARY_PATH"])
-        if occursin("conda", ld_path) || occursin("anaconda", ld_path)
-            if get(ENV, "PDMO_LEGACY_REEXEC", "0") != "1"
-                cmd_parts = copy(Base.julia_cmd().exec)
-                append!(cmd_parts, [abspath(@__FILE__); ARGS])
-                cmd = addenv(Cmd(cmd_parts),
-                    "LD_LIBRARY_PATH" => "",
-                    "PDMO_LEGACY_REEXEC" => "1")
-                proc = run(ignorestatus(cmd))
-                exit(proc.exitcode)
-            end
-            delete!(ENV, "LD_LIBRARY_PATH")
-        end
-    end
-
-    Pkg.activate(legacy_env_dir)
-    Pkg.develop(path=repo_root)
-    # Always instantiate: works both with and without Manifest.toml.
+    Pkg.activate(repo_root)
+    # Warmup-style dependency setup for fresh environments.
     Pkg.instantiate()
 end
 
@@ -50,7 +29,8 @@ function inspect_cocluster(mps_path::AbstractString;
     output_dir::AbstractString=".",
     k::Int=6, 
     iters::Int=5, 
-    forceSplit::Bool=true)
+    forceSplit::Bool=true,
+    promotePairwiseRows::Bool=false)
     
     out_dir = abspath(output_dir)
     isdir(out_dir) || mkpath(out_dir)
@@ -120,6 +100,7 @@ function inspect_cocluster(mps_path::AbstractString;
         iters = iters,
         rng = MersenneTwister(42),
         forceSplitSingleBlock = forceSplit,
+        promotePairwiseRows = promotePairwiseRows,
         return_layout = true,
     )
     row_block = layout.row_block
@@ -344,13 +325,14 @@ if abspath(PROGRAM_FILE) == @__FILE__
     function usage()
         println("""
 Usage:
-    julia applications/GenericLP/inspect_cocluster.jl <mps_path> [output_dir] [k] [iters] [forceSplit]
+    julia applications/GenericLP/inspect_cocluster.jl <mps_path> [output_dir] [k] [iters] [forceSplit] [promotePairwiseRows]
 
 Defaults:
     output_dir = applications/GenericLP/enlight_hard_plots
     k          = 6
     iters      = 5
     forceSplit = true
+    promotePairwiseRows = false
 """)
     end
 
@@ -363,6 +345,12 @@ Defaults:
     k          = length(ARGS) >= 3 ? parse(Int, ARGS[3]) : 6
     iters      = length(ARGS) >= 4 ? parse(Int, ARGS[4]) : 5
     forceSplit = length(ARGS) >= 5 ? lowercase(ARGS[5]) in ("true","1","yes","y") : true
-    inspect_cocluster(mps_path; output_dir=output_dir, k=k, iters=iters, forceSplit=forceSplit)
+    promotePairwiseRows = length(ARGS) >= 6 ? lowercase(ARGS[6]) in ("true","1","yes","y") : false
+    inspect_cocluster(mps_path;
+        output_dir=output_dir,
+        k=k,
+        iters=iters,
+        forceSplit=forceSplit,
+        promotePairwiseRows=promotePairwiseRows)
 end
 
