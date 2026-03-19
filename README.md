@@ -34,7 +34,7 @@ julia PDMO.jl/applications/GenericLP/enlight_hard_demo.jl /PATH/TO/enlight_hard.
 We use the following script `PDMO.jl/advanced/src/NetworkFlow/runNetworkFlowProblem.jl` to produce results presented in Section 3.2. Example usage: 
 
 ```
-./julia/run.sh -t 16 PDMO.jl/advanced/src/NetworkFlow/runNetworkFlowProblem.jl  --solver original --maxIter 100000 --initialRho 1.0 --timeLimit 3600.0 --seed 1 --logInterval 1000 --random 300 2000 
+julia -t 16 PDMO.jl/advanced/src/NetworkFlow/runNetworkFlowProblem.jl  --solver original --maxIter 100000 --initialRho 1.0 --timeLimit 3600.0 --seed 1 --logInterval 1000 --random 300 2000 
 ```
 where 
 - `--random <nodes> <arcs>`: Generate a random feasible instance
@@ -48,7 +48,7 @@ The script used to generate Fig. 11 in the paper is available upon request.
 ## Section 3.3 Distributed DC Optimal Power Flow
 We use the script `PDMO.jl/advanced/src/OPF/runDistributedOPF.jl` to produce results presented in Section 3.3. Example usage: 
 ```
-./julia -t 16 PDMO.jl/advanced/src/OPF/runDistributedOPF.jl /PATH/TO/case30.m 3 original 100.0 
+julia -t 16 PDMO.jl/advanced/src/OPF/runDistributedOPF.jl /PATH/TO/case30.m 3 original 100.0 
 ```
 where the arguments are: 
 - `ARGS[1]` -> `matpower_path` (required): Absolute path to the MATPOWER case file.
@@ -67,7 +67,7 @@ The script used to generate Fig. 13 and Fig. 14 in the paper is available upon r
 ## Section 3.4 Decentralized Consensus Optimization 
 We use the script  `PDMO.jl/advanced/src/DistributedOpt/runDistributedOpt.jl` to produce results presented in Section 3.4. Example usage:
 ```
-./julia/run.sh -t 16 PDMO.jl/advanced/src/DistributedOpt/runDistributedOpt.jl 100 500 250 original 10.0 100000 1000 111
+julia -t 16 PDMO.jl/advanced/src/DistributedOpt/runDistributedOpt.jl 100 500 250 original 10.0 100000 1000 111
 ```
 where the arguments are 
 - `args[1]` -> `numberNodes` (required): Number of nodes.
