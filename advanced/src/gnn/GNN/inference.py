@@ -63,7 +63,7 @@ def get_structure_features(t):
     if matrix.shape[0] == matrix.shape[1]:
         return np.array([
             np.linalg.matrix_rank(matrix),
-            np.linalg.trace(matrix),
+            np.trace(matrix),
             #np.linalg.cond(matrix),
             # np.linalg.det(matrix),
             # np.linalg.slogdet(matrix)[0],
@@ -74,7 +74,7 @@ def get_structure_features(t):
     else:
         return np.array([
             np.linalg.matrix_rank(matrix),
-            np.linalg.trace(matrix),
+            np.trace(matrix),
             #np.linalg.cond(matrix),
             # np.linalg.det(matrix),
             # np.linalg.slogdet(matrix)[0],

@@ -46,6 +46,17 @@ where
 The script used to generate Fig. 11 in the paper is available upon request. 
 
 ## Section 3.3 Distributed DC Optimal Power Flow
+Experiments in Section 3.3 and Section 3.4 test on GNN-based bipartization strategyies and need to additionally set the environment variable `PDMO_PYTHON` to a python binary with `torch, torch_geometric, numpy` installed.
+For example:
+```
+  python -m venv .venv
+  . .venv/bin/activate
+  pip install torch numpy
+  pip install torch-geometric
+
+  export PDMO_PYTHON=/path/to/.venv/bin/python
+```
+
 We use the script `PDMO.jl/advanced/src/OPF/runDistributedOPF.jl` to produce results presented in Section 3.3. Example usage: 
 ```
 julia -t 16 PDMO.jl/advanced/src/OPF/runDistributedOPF.jl /PATH/TO/case30.m 3 original 100.0 
