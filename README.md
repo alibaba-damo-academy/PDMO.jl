@@ -1,5 +1,5 @@
 # Codes for *Automating Reformulation for Parallel ADMM*
-This branch provides codes for numerical experiments in the paper *Automating Reformulation for Parallel ADMM* by Sun et al. (2026). To begin with, download the project folder and checkout the current branch. 
+This branch provides codes for numerical experiments in the paper *[Automating Reformulation for Parallel ADMM](https://arxiv.org/abs/2603.19417)* by Sun et al. (2026). To begin with, download the project folder and checkout the current branch. 
 ```
 cd PDMO.jl 
 git checkout test/reformulation 
