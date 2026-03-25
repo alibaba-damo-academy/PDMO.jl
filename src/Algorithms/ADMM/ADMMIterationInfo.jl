@@ -66,6 +66,7 @@ mutable struct ADMMIterationInfo
     dualSol::Dict{String, NumericVariable}
     dualSolPrev::Dict{String, NumericVariable}
     dualBuffer::Dict{String, NumericVariable}
+    edgeIDs::Vector{String}
 
     # termination info
     partitionAlgorithmTime::Float64
@@ -91,6 +92,7 @@ mutable struct ADMMIterationInfo
         Dict{String, NumericVariable}(),
         Dict{String, NumericVariable}(), 
         Dict{String, NumericVariable}(),
+        String[],
         Inf, -1, 0.0,
         ADMM_TERMINATION_UNSPECIFIED)
 end 
@@ -175,9 +177,8 @@ function updatePrimalResidualsInBuffer!(info::ADMMIterationInfo, admmGraph::ADMM
     
     obj = sum((admmGraph.nodes[nodeID].f)(info.primalSol[nodeID]) + (admmGraph.nodes[nodeID].g)(info.primalSol[nodeID]) for nodeID in keys(info.primalSol))
 
-    edges = collect(keys(info.dualSol))
+    edges = info.edgeIDs
     numberEdges = length(edges)
-    ALTerms = zeros(numberEdges)
 
     rho = info.rhoHistory[end][1]
     addToBuffer = true 
@@ -191,6 +192,7 @@ function updatePrimalResidualsInBuffer!(info::ADMMIterationInfo, admmGraph::ADMM
     nT = Threads.maxthreadid()
     presL2SquareByThread = zeros(Float64, nT)
     presLInfByThread = fill(0.0, nT)
+    alTermByThread = zeros(Float64, nT)
     @threads for idx in 1:numberEdges
         tid = Threads.threadid()
         edgeID = edges[idx]
@@ -206,9 +208,9 @@ function updatePrimalResidualsInBuffer!(info::ADMMIterationInfo, admmGraph::ADMM
         presL2SquareByThread[tid] += rnorm2
         presLInfByThread[tid] = max(presLInfByThread[tid], rnormInf)
         
-        ALTerms[idx] += dot(info.dualSol[edgeID], info.dualBuffer[edgeID])
+        alTermByThread[tid] += dot(info.dualSol[edgeID], info.dualBuffer[edgeID])
         # Augmented Lagrangian penalty term is per-constraint: (ρ/2)||r_e||^2
-        ALTerms[idx] += 0.5 * rho * rnorm2
+        alTermByThread[tid] += 0.5 * rho * rnorm2
     end 
     presL2Square = sum(presL2SquareByThread)
     presLInf = maximum(presLInfByThread)
@@ -216,7 +218,7 @@ function updatePrimalResidualsInBuffer!(info::ADMMIterationInfo, admmGraph::ADMM
     push!(info.presL2, sqrt(presL2Square))
     push!(info.presLInf, presLInf)
     push!(info.obj, obj)
-    push!(info.alObj, obj + sum(ALTerms))
+    push!(info.alObj, obj + sum(alTermByThread))
 end 
 
 """
@@ -302,6 +304,7 @@ info = ADMMIterationInfo(admmGraph, initialRho)
 """
 function ADMMIterationInfo(admmGraph::ADMMBipartiteGraph, rho::Float64)
     info = ADMMIterationInfo()
+    info.edgeIDs = collect(keys(admmGraph.edges))
 
     # initialize primal dual buffers
     for (nodeID, node) in admmGraph.nodes 

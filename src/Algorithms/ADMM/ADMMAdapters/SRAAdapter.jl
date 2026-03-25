@@ -152,7 +152,7 @@ The adapter allocates memory proportional to:
 
 """
 function initialize!(adapter::SRAAdapter, info::ADMMIterationInfo, admmGraph::ADMMBipartiteGraph)
-    for edgeID in collect(keys(admmGraph.edges))
+    for edgeID in keys(admmGraph.edges)
         adapter.dualDiff[edgeID] = zero(admmGraph.edges[edgeID].rhs)
         adapter.BzDiff[edgeID] = zero(admmGraph.edges[edgeID].rhs)
     end 
@@ -230,7 +230,7 @@ function updatePenalty(adapter::SRAAdapter, info::ADMMIterationInfo, admmGraph::
 
     # numerator: ||y^{k+1} - y^{k}||_2
     dualDiff = 0.0
-    for edgeID in collect(keys(info.dualSol))
+    for edgeID in info.edgeIDs
         copyto!(adapter.dualDiff[edgeID], info.dualSol[edgeID])
         axpy!(-1.0, info.dualSolPrev[edgeID], adapter.dualDiff[edgeID])
         dualDiff += dot(adapter.dualDiff[edgeID], adapter.dualDiff[edgeID])

@@ -1,19 +1,8 @@
 """
     MultiblockGraph
 
-A module for representing and analyzing the structure of multi-block optimization problems as graphs.
-
-This module provides data structures and algorithms to:
-1. Create a graph representation from a `MultiblockProblem`
-2. Analyze graph properties such as bipartiteness and connectivity
-3. Identify relationships between variable blocks and constraints
-
-The graph representation uses:
-- Nodes: Represent either variable blocks or constraints
-- Edges: Represent relationships between nodes (either two-block or multi-block)
-
-This representation is particularly useful for algorithm selection and problem decomposition
-in distributed optimization algorithms like ADMM (Alternating Direction Method of Multipliers).
+A graph representation of a `MultiblockProblem`, with utilities to check
+bipartiteness and connectivity.
 """
 
 """
@@ -27,16 +16,7 @@ relationships between them.
 """
     NodeType
 
-An enumeration defining the types of nodes in a multiblock graph.
-
-# Values
-- `VARIABLE_NODE`: Node representing a variable block from the original problem
-- `CONSTRAINT_NODE`: Node representing a constraint from the original problem
-
-# Usage
-Node types are used to distinguish between variable blocks and constraints in the graph representation.
-Variable nodes correspond to optimization variables, while constraint nodes represent constraints that
-involve more than two blocks.
+Node category in `MultiblockGraph`.
 """
 @enum NodeType begin 
     VARIABLE_NODE     # Node representing a variable block
@@ -71,16 +51,7 @@ end
 """
     EdgeType
 
-An enumeration defining the types of edges in a multiblock graph.
-
-# Values
-- `TWO_BLOCK_EDGE`: Edge connecting exactly two variable nodes (representing a constraint involving two blocks)
-- `MULTIBLOCK_EDGE`: Edge connecting a variable node to a constraint node (representing participation in a multi-block constraint)
-
-# Usage
-Edge types distinguish between constraints that involve exactly two blocks (represented as direct edges
-between variable nodes) and constraints that involve more than two blocks (represented as edges from
-variable nodes to constraint nodes).
+Edge category in `MultiblockGraph`.
 """
 @enum EdgeType begin 
     TWO_BLOCK_EDGE     # Edge connecting exactly two variable nodes
@@ -118,28 +89,14 @@ end
 """
     createNodeID(id::BlockID; isConstraint::Bool=false) -> String
 
-Generate a unique node ID string from a block or constraint ID.
+Create a stable node ID string from a block/constraint ID.
 
 # Arguments
 - `id::BlockID`: The block or constraint ID from the original MultiblockProblem
 - `isConstraint::Bool=false`: If true, generates a constraint node ID; otherwise generates a variable node ID
 
 # Returns
-- A string ID that uniquely identifies the node in the graph
-
-# Examples
-```julia
-# Create a variable node ID
-var_node_id = createNodeID("Block1")  # Returns "VariableNode(Block1)"
-
-# Create a constraint node ID
-constr_node_id = createNodeID("Constraint1", isConstraint=true)  # Returns "ConstraintNode(Constraint1)"
-```
-
-# Usage
-This function is used internally when constructing a MultiblockGraph to create unique identifiers
-for nodes. The generated IDs follow a consistent naming convention to distinguish between
-variable nodes and constraint nodes.
+- `String`: `VariableNode(<id>)` or `ConstraintNode(<id>)`.
 """
 function createNodeID(id::BlockID; isConstraint::Bool=false)
     if isConstraint
@@ -152,29 +109,15 @@ end
 """
     createEdgeID(constrID::BlockID; variableID::BlockID="") -> String
 
-Generate a unique edge ID string from constraint and variable IDs.
+Create a stable edge ID string from constraint/variable IDs.
 
 # Arguments
 - `constrID::BlockID`: The constraint ID from the original MultiblockProblem
 - `variableID::BlockID=""`: The variable ID (empty for TWO_BLOCK_EDGE, specified for MULTIBLOCK_EDGE)
 
 # Returns
-- A string ID that uniquely identifies the edge in the graph
-
-# Examples
-```julia
-# Create a two-block edge ID (constraint involves exactly 2 blocks)
-two_block_edge_id = createEdgeID("Constraint1")  # Returns "TwoBlockEdge(Constraint1)"
-
-# Create a multiblock edge ID (constraint involves >2 blocks)
-multi_edge_id = createEdgeID("Constraint2", variableID="Block1")  # Returns "MultiblockEdge(Constraint2, Block1)"
-```
-
-# Usage
-This function is used internally when constructing a MultiblockGraph to create unique identifiers
-for edges. The type of edge ID depends on whether a variableID is provided:
-- No variableID: TWO_BLOCK_EDGE (direct connection between two variable nodes)
-- With variableID: MULTIBLOCK_EDGE (connection from variable node to constraint node)
+- `String`: `TwoBlockEdge(<constrID>)` if `variableID == ""`, otherwise
+  `MultiblockEdge(<constrID>, <variableID>)`.
 """
 function createEdgeID(constrID::BlockID; variableID::BlockID="")
     if variableID == ""

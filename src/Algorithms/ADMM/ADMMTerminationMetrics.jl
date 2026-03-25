@@ -142,6 +142,7 @@ mutable struct ADMMTerminationMetrics
     dualSolBetweenPrimalUpdates::Dict{String, NumericVariable} # dualSol_1
     BzBuffer::Dict{String, NumericVariable}                   # BzBuffer
     dualBuffer::Dict{String, NumericVariable}                 # yBuffer, Not used in Mingyu's code. Used in current code for intermediate computation.
+    edgeIDs::Vector{String}
 
     # metrics for infeasibility and unboundedness detection 
     count_presL2_1::Int64
@@ -217,6 +218,7 @@ mutable struct ADMMTerminationMetrics
             dualSolBetweenPrimalUpdates, 
             BzBuffer, 
             dualBuffer, 
+            collect(keys(info.dualSol)),
             0, 0, 0, 
             0, 0, 0, 
             0, 0, 0, 0, 0, 
@@ -276,13 +278,15 @@ function collectTerminationMetricsBetweenPrimalUpdates!(metrics::ADMMTermination
     info::ADMMIterationInfo, 
     admmGraph::ADMMBipartiteGraph)
 
-    edges = collect(keys(metrics.dualSolBetweenPrimalUpdates))
+    edges = metrics.edgeIDs
     numberEdges = length(edges)
     addToBuffer = true 
 
     # collect Ax^{k+1} + Bz^k-b in metrics.dualBuffer
-    presSquare = 0.0
+    nT = Threads.maxthreadid()
+    presSquareByThread = zeros(Float64, nT)
     @threads for idx in 1:numberEdges
+        tid = Threads.threadid()
         edgeID = edges[idx]
         nodeID1 = admmGraph.edges[edgeID].nodeID1
         nodeID2 = admmGraph.edges[edgeID].nodeID2
@@ -291,9 +295,10 @@ function collectTerminationMetricsBetweenPrimalUpdates!(metrics::ADMMTermination
         admmGraph.edges[edgeID].mappings[nodeID1](info.primalSol[nodeID1], metrics.dualBuffer[edgeID], addToBuffer)
         admmGraph.edges[edgeID].mappings[nodeID2](info.primalSol[nodeID2], metrics.dualBuffer[edgeID], addToBuffer)
 
-        presSquare += dot(metrics.dualBuffer[edgeID], metrics.dualBuffer[edgeID])
+        presSquareByThread[tid] += dot(metrics.dualBuffer[edgeID], metrics.dualBuffer[edgeID])
     end 
 
+    presSquare = sum(presSquareByThread)
     push!(metrics.presL2BetweenPrimalUpdates, sqrt(presSquare))
 
     # collect y^k + rho * (Ax^{k+1} + Bz^k-b)
@@ -361,12 +366,14 @@ dual_diff = ||y^{k+1} - (y^k + ρ(Ax^{k+1} + Bz^k - b))||₂
 """
 function collectTerminationMetricsAfterDualUpdates!(metrics::ADMMTerminationMetrics, info::ADMMIterationInfo, admmGraph::ADMMBipartiteGraph)
     
-    edges = collect(keys(metrics.dualSolBetweenPrimalUpdates))
+    edges = metrics.edgeIDs
     numberEdges = length(edges)
 
     # compute Bz^{k+1}
-    BzSquare = 0.0
+    nT = Threads.maxthreadid()
+    BzSquareByThread = zeros(Float64, nT)
     @threads for idx in 1:numberEdges
+        tid = Threads.threadid()
         edgeID = edges[idx]
         nodeID1 = admmGraph.edges[edgeID].nodeID1
         nodeID2 = admmGraph.edges[edgeID].nodeID2
@@ -374,21 +381,25 @@ function collectTerminationMetricsAfterDualUpdates!(metrics::ADMMTerminationMetr
         zNodeID = admmGraph.nodes[nodeID1].assignment == 1 ? nodeID1 : nodeID2 
         admmGraph.edges[edgeID].mappings[zNodeID](info.primalSol[zNodeID], metrics.BzBuffer[edgeID], false)
 
-        BzSquare += dot(metrics.BzBuffer[edgeID], metrics.BzBuffer[edgeID])
+        BzSquareByThread[tid] += dot(metrics.BzBuffer[edgeID], metrics.BzBuffer[edgeID])
     end 
+    BzSquare = sum(BzSquareByThread)
     push!(metrics.BzNorm, sqrt(BzSquare))
 
     # compute dual difference and dual norm 
-    dualNormSquare = 0.0
-    dualDifferenceSquare = 0.0 
+    dualNormSquareByThread = zeros(Float64, nT)
+    dualDifferenceSquareByThread = zeros(Float64, nT)
     @threads for idx in 1:numberEdges
+        tid = Threads.threadid()
         edgeID = edges[idx]
-        dualNormSquare += dot(info.dualSol[edgeID], info.dualSol[edgeID])
+        dualNormSquareByThread[tid] += dot(info.dualSol[edgeID], info.dualSol[edgeID])
 
         copyto!(metrics.dualBuffer[edgeID], info.dualSol[edgeID])
         axpy!(-1.0, metrics.dualSolBetweenPrimalUpdates[edgeID], metrics.dualBuffer[edgeID])
-        dualDifferenceSquare += dot(metrics.dualBuffer[edgeID], metrics.dualBuffer[edgeID])
+        dualDifferenceSquareByThread[tid] += dot(metrics.dualBuffer[edgeID], metrics.dualBuffer[edgeID])
     end 
+    dualNormSquare = sum(dualNormSquareByThread)
+    dualDifferenceSquare = sum(dualDifferenceSquareByThread)
     push!(metrics.dualNorm, sqrt(dualNormSquare))
     push!(metrics.dualDifferenceL2, sqrt(dualDifferenceSquare))
 

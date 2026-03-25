@@ -12,6 +12,10 @@ isSupportedByJuMP(f::Type{<:IndicatorBinary}) = true
 
 # function value
 function (f::IndicatorBinary)(x::NumericVariable, enableParallel::Bool=false)
+    if isa(x, Number)
+        return (abs(x - 0.0) < FeasTolerance || abs(x - 1.0) < FeasTolerance) ? 0.0 : Inf
+    end
+
     for k in eachindex(x)
         if abs(x[k] - 0.0) < FeasTolerance || abs(x[k] - 1.0) < FeasTolerance
             continue

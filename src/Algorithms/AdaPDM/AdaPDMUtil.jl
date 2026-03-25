@@ -1,11 +1,7 @@
 """
     AdaPDMLog(iter, info::AdaPDMIterationInfo, param::AbstractAdaPDMParam; final::Bool = false)
 
-Log iteration information for the Adaptive Primal-Dual Method algorithms.
-
-This function provides formatted output of algorithm progress including objective values,
-residuals, and timing information. It handles both regular iteration logging and final
-summary logging.
+Print one iteration log line for AdaPDM methods.
 
 # Arguments
 - `iter::Int`: Current iteration number (0 for initialization)
@@ -14,27 +10,7 @@ summary logging.
 - `final::Bool=false`: Whether this is the final log entry
 
 # Returns
-- `Bool`: `true` if logging was performed, `false` if skipped due to logging interval
-
-# Behavior
-- **Header Display**: Shows column headers every 20 log intervals and at iteration 0
-- **Selective Logging**: Only logs at specified intervals unless `final=true`
-- **Formatted Output**: Displays iteration number, Lagrangian objective, primal/dual residuals, and timing
-
-# Output Format
-```
-ITERATION    LAGRANGIAN     PRES(l2)     PRES(lInf)    DRES(l2)    DRES(lInf)     TIME
-        0    1.2345e+02    1.23e-04     1.23e-04     1.23e-04     1.23e-04     1.23
-```
-
-# Examples
-```julia
-# Regular iteration logging
-logged = AdaPDMLog(100, info, param)
-
-# Force final logging regardless of interval
-AdaPDMLog(150, info, param; final=true)
-```
+- `Bool`: `true` if a log line is printed, else `false`.
 
 See also: `AdaPDMIterationInfo`, `AbstractAdaPDMParam`
 """
@@ -87,47 +63,11 @@ end
 """
     AdaPDMLog(info::AdaPDMIterationInfo, trueObj::Float64=Inf)
 
-Display a comprehensive summary of the Adaptive Primal-Dual Method algorithm results.
-
-This function prints a formatted summary of the algorithm's final state, including
-convergence status, final objective and residual values, iteration count, and timing.
-Optionally compares against a known true objective value.
+Print final AdaPDM summary statistics.
 
 # Arguments
 - `info::AdaPDMIterationInfo`: Final iteration information from the algorithm
 - `trueObj::Float64=Inf`: True objective value for comparison (if known)
-
-# Output Information
-- **Solver Status**: Termination reason (optimal, iteration limit, time limit, etc.)
-- **Lagrangian**: Final Lagrangian objective value
-- **Primal Residuals**: Final L2 and L∞ primal residuals
-- **Dual Residuals**: Final L2 and L∞ dual residuals  
-- **Iteration Count**: Total iterations performed
-- **Total Time**: Algorithm execution time in seconds
-- **Objective Difference**: Difference from true objective (if provided)
-
-# Examples
-```julia
-# Basic summary without true objective
-AdaPDMLog(info)
-
-# Summary with true objective comparison
-AdaPDMLog(info, 42.0)
-```
-
-# Sample Output
-```
-AdaPDM Summary: 
-    Solver Status   =   ADA_PDM_TERMINATION_OPTIMAL
-    Lagrangian      =   4.2345e+01
-    Pres (L2)       =   9.8765e-07
-    Pres (LInf)     =   1.2345e-06
-    Dres (L2)       =   8.7654e-07
-    Dres (LInf)     =   1.1111e-06
-    Stop. Iter      =          150
-    Total Time      =        12.34
-    True Obj. Diff  =         0.23
-```
 
 See also: `AdaPDMIterationInfo`, `getTerminationStatus`
 """

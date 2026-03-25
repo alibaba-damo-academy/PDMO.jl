@@ -94,6 +94,10 @@ include("../../test_helper.jl")
     @testset "IndicatorSOC" begin
         include("testIndicatorSOC.jl")
     end
+
+    @testset "IndicatorRotatedSOC" begin
+        include("testIndicatorRotatedSOC.jl")
+    end
     
     @testset "ComponentwiseExponentialFunction" begin
         include("testComponentwiseExponentialFunction.jl")
@@ -126,9 +130,21 @@ include("../../test_helper.jl")
     @testset "WrapperScalarInputFunction" begin
         include("testWrapperScalarInputFunction.jl")
     end
+
+    @testset "AbstractFunctionUtil Single-Block Regression" begin
+        include("testAbstractFunctionUtilSingleBlock.jl")
+    end
     
     @testset "IndicatorHyperplane" begin
         include("testIndicatorHyperplane.jl")
+    end
+
+    @testset "IndicatorBinary" begin
+        include("testIndicatorBinary.jl")
+    end
+
+    @testset "IndicatorMixedInteger" begin
+        include("testIndicatorMixedInteger.jl")
     end
     
 end 

@@ -267,13 +267,13 @@ end
 """ 
     checkCompositeProblemValidity!(mbp::MultiblockProblem)
 
-The input is a mbp with (p+1) blocks: 
+Check whether `mbp` matches the composite structure with `(p+1)` blocks:
 
     min sum_{i=1}^p (f_i(x_i) + g_i(x_i)) + g_{p+1}(x_{p+1})
     s.t. A1x1 + A2x2 + ... + Apxp - x_{p+1} = 0
 
-The function checks that if the input mbp is of the form described above. If x_{p+1} is 
-    identified, this block wil be moved to the end of mbp.blocks. 
+If a valid proximal-only block `x_{p+1}` is identified, it is moved to the end of
+`mbp.blocks`.
 
 # Arguments
 - `mbp::MultiblockProblem`: The multiblock problem to check.

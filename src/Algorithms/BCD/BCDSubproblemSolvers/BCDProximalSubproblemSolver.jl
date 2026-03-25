@@ -77,52 +77,12 @@ end
 """
     BCDProximalSubproblemSolver <: AbstractBCDSubproblemSolver
 
-JuMP-based BCD subproblem solver supporting both original and proximal formulations.
-
-This solver uses JuMP with Ipopt to solve BCD subproblems. It can handle both the original
-BCD formulation (direct minimization) and the proximal BCD formulation (with added 
-quadratic regularization terms).
+A JuMP/Ipopt-based BCD subproblem solver.
 
 # Fields
 - `models::Vector{BCDJuMPModel}`: JuMP models for each block subproblem
-- `originalSubproblem::Bool`: Whether to solve original (true) or proximal (false) subproblems
-
-# Mathematical Formulations
-
-## Original BCD Subproblem
-When `originalSubproblem=true`, solves:
-```
-min_{x_i} F(x_1^{k+1}, ..., x_{i-1}^{k+1}, x_i, x_{i+1}^k, ..., x_n^k) + f_i(x_i) + g_i(x_i)
-```
-
-## Proximal BCD Subproblem  
-When `originalSubproblem=false`, solves:
-```
-min_{x_i} F(x_1^{k+1}, ..., x_{i-1}^{k+1}, x_i, x_{i+1}^k, ..., x_n^k) + f_i(x_i) + g_i(x_i) + (L_i/2)||x_i - x_i^k||²
-```
-
-where `L_i` is automatically estimated based on Lipschitz constants.
-
-# Constructor
-```julia
-BCDProximalSubproblemSolver(; originalSubproblem::Bool = true)
-```
-
-# Parameters
-- `originalSubproblem::Bool = true`: 
-  - `true`: Solve original BCD subproblems (direct minimization)
-  - `false`: Solve proximal BCD subproblems (with quadratic regularization)
-
-# Solver Configuration
-- Uses Ipopt as the underlying nonlinear solver
-- Automatically detects HSL linear solvers if available (ma27)
-- Handles both quadratic and nonlinear objective functions
-- Supports domain constraints via indicator functions in `g_i`
-
-# Performance Notes
-- Proximal formulation (`originalSubproblem=false`) can improve convergence for non-convex problems
-- Proximal coefficients are automatically estimated as 10% of Lipschitz constant estimates
-- JuMP models are cached and reused across iterations for efficiency
+- `originalSubproblem::Bool`: `true` for original subproblems, `false` to add
+  proximal quadratic regularization.
 
 See also: `AbstractBCDSubproblemSolver`, `BCDProximalLinearSubproblemSolver`, `initialize!`, `solve!`
 """
@@ -141,6 +101,7 @@ function initialize!(solver::BCDProximalSubproblemSolver,
     info::BCDIterationInfo)
 
     numberBlocks = length(mbp.blocks)
+    empty!(solver.models)
     
     for k in 1:numberBlocks 
         push!(solver.models, BCDJuMPModel(k, mbp, solver.originalSubproblem))

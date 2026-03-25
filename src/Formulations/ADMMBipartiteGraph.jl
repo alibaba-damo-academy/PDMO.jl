@@ -1,56 +1,15 @@
 """
     ADMMNode
 
-A node in the ADMM bipartite graph representation for the Alternating Direction Method of Multipliers.
-
-ADMMNode represents either an original variable block from the multiblock problem or an auxiliary node
-created from edge splitting during bipartization. Each node contains optimization functions and 
-maintains connectivity information for the ADMM algorithm.
+A node in the ADMM bipartite graph.
 
 # Fields
-- `f::AbstractFunction`: Primary objective function component (smooth part of the objective)
-- `g::AbstractFunction`: Secondary objective function component (non-smooth part, often regularization or constraint indicators)
-- `val::NumericVariable`: Current value/estimate of the variable associated with this node
-- `neighbors::Set{String}`: Set of edge IDs connected to this node in the bipartite graph
-- `convertedEdgeID::String`: Original edge ID from MultiblockGraph if this node was created by splitting an edge; empty string for original variable nodes
-- `assignment::Int`: Partition assignment in the bipartite graph (0 for left partition, 1 for right partition)
-
-# Node Types
-1. **Original Variable Nodes**: Represent variable blocks from the original MultiblockProblem
-   - Have non-trivial `f` and `g` functions from the original block
-   - `convertedEdgeID` is empty string
-   - `val` initialized from original block value
-
-2. **Constraint Nodes**: Represent multi-block constraints from the original problem
-   - Have `f = Zero()` and `g = IndicatorSumOfNVariables(...)`
-   - Created for constraints involving more than 2 blocks
-   - `convertedEdgeID` is empty string
-
-3. **Split Edge Nodes**: Auxiliary nodes created during bipartization
-   - Created when edges need to be split to maintain bipartite structure
-   - Have specific function configurations depending on split type
-   - `convertedEdgeID` contains the original edge ID
-
-# Constructor
-    ADMMNode(f, g, val, neighbors, convertedEdgeID, assignment)
-
-# Usage in ADMM
-- **Left Partition**: Typically contains variable nodes for x-update step
-- **Right Partition**: Typically contains constraint nodes and auxiliary nodes for z-update step
-- **Functions**: Used in proximal operators during ADMM iterations
-- **Connectivity**: Determines the coupling structure in ADMM decomposition
-
-# Examples
-```julia
-# Original variable node
-node = ADMMNode(QuadraticFunction(...), IndicatorBox(...), x0, Set{String}(), "", 0)
-
-# Constraint node  
-node = ADMMNode(Zero(), IndicatorSumOfNVariables(...), z0, Set{String}(), "", 1)
-
-# Split edge auxiliary node
-node = ADMMNode(Zero(), IndicatorSumOfNVariables(2, rhs), aux_val, Set{String}(), "EdgeID123", 1)
-```
+- `f::AbstractFunction`: Smooth/primary term for this node.
+- `g::AbstractFunction`: Proximal/non-smooth term for this node.
+- `val::NumericVariable`: Current node value.
+- `neighbors::Set{String}`: Incident ADMM edge IDs.
+- `convertedEdgeID::String`: Original edge ID if created by edge splitting, else `""`.
+- `assignment::Int`: Bipartite partition assignment (`0` left, `1` right).
 """
 mutable struct ADMMNode 
     f::AbstractFunction 
@@ -64,65 +23,14 @@ end
 """
     ADMMEdge
 
-An edge in the ADMM bipartite graph connecting two nodes and representing a constraint in the ADMM decomposition.
-
-ADMMEdge represents a linear constraint between two nodes in the bipartite graph. Each edge corresponds
-to either an original constraint from the multiblock problem or a constraint created during edge splitting
-for bipartization. The edge defines the coupling between variables in the ADMM algorithm.
+A linear constraint edge between two `ADMMNode`s.
 
 # Fields
-- `nodeID1::String`: ID of the first node connected by this edge (typically from left partition)
-- `nodeID2::String`: ID of the second node connected by this edge (typically from right partition)
-- `mappings::Dict{String, AbstractMapping}`: Linear mappings for each node involved in the constraint
-  - Key: node ID, Value: linear mapping applied to that node's variable
-  - Represents the coefficient matrices in the linear constraint
-- `rhs::NumericVariable`: Right-hand side vector/value of the constraint represented by this edge
-- `splittedEdgeID::String`: Original edge ID from MultiblockGraph if this edge was created by splitting; empty string for original edges
-
-# Edge Types
-1. **Original Two-Block Edges**: Direct constraints between two variable blocks
-   - Represent constraints of the form `A₁x₁ + A₂x₂ = b`
-   - Connect two original variable nodes
-   - `splittedEdgeID` is empty string
-
-2. **Multi-Block Edges**: Constraints involving constraint nodes
-   - Represent constraints of the form `Aᵢxᵢ - zⱼ = 0`
-   - Connect a variable node to a constraint node
-   - `splittedEdgeID` is empty string
-
-3. **Split Edges**: Edges created from splitting original edges
-   - Created during bipartization to maintain bipartite structure
-   - Connect original nodes to auxiliary split nodes
-   - `splittedEdgeID` contains the original edge ID
-
-# Mathematical Representation
-Each edge represents a constraint: `mapping[nodeID1] * x₁ + mapping[nodeID2] * x₂ = rhs`
-- For node i with variable xᵢ, the constraint contribution is `mappings[nodeIDᵢ](xᵢ)`
-- The complete constraint equation must equal the `rhs` value
-
-# Constructor
-    ADMMEdge(nodeID1, nodeID2, mappings, rhs, splittedEdgeID)
-
-# Usage in ADMM
-- **Constraint Coupling**: Defines how variables are coupled in the optimization problem
-- **Dual Variables**: Each edge corresponds to dual variables (Lagrange multipliers) in ADMM
-- **Update Steps**: Used in both primal and dual update steps of the ADMM algorithm
-- **Convergence**: Residuals computed using these constraint definitions
-
-# Examples
-```julia
-# Original two-block constraint: A₁x₁ + A₂x₂ = b
-mappings = Dict("node1" => LinearMappingMatrix(A1), "node2" => LinearMappingMatrix(A2))
-edge = ADMMEdge("node1", "node2", mappings, b, "")
-
-# Multi-block constraint connection: Aᵢxᵢ - zⱼ = 0
-mappings = Dict("var_node" => LinearMappingMatrix(A), "constr_node" => LinearMappingExtraction(...))
-edge = ADMMEdge("var_node", "constr_node", mappings, zeros(m), "")
-
-# Split edge constraint: Aᵢxᵢ - z₁ = 0 (from splitting)
-mappings = Dict("original_node" => LinearMappingMatrix(A), "split_node" => LinearMappingExtraction(...))
-edge = ADMMEdge("original_node", "split_node", mappings, zeros(m), "OriginalEdgeID")
-```
+- `nodeID1::String`: First endpoint node ID.
+- `nodeID2::String`: Second endpoint node ID.
+- `mappings::Dict{String, AbstractMapping}`: Per-endpoint linear maps.
+- `rhs::NumericVariable`: Constraint right-hand side.
+- `splittedEdgeID::String`: Original graph edge ID if this edge was split, else `""`.
 """
 mutable struct ADMMEdge 
     nodeID1::String             # ADMM node ID of the first node
@@ -135,43 +43,13 @@ end
 """
     createADMMNodeID(edgeID::String) -> String
 
-Generate a unique node ID for an auxiliary node created from splitting an edge during bipartization.
-
-When an edge needs to be split to maintain bipartite structure, this function creates a consistent
-naming scheme for the new auxiliary node that will be inserted at the split point.
+Create the auxiliary ADMM node ID for a split edge.
 
 # Arguments
 - `edgeID::String`: The original edge ID from the MultiblockGraph that is being split
 
 # Returns
-- A string ID for the new ADMM auxiliary node following the pattern "ADMMNodeConvertedFromEdge(edgeID)"
-
-# Usage
-This function is used internally during the construction of ADMMBipartiteGraph when:
-- A TWO_BLOCK_EDGE needs to be split due to bipartization decisions
-- A MULTIBLOCK_EDGE needs to be split to maintain bipartite structure
-- The bipartization algorithm determines that an edge violates bipartiteness
-
-# Examples
-```julia
-original_edge_id = "TwoBlockEdge(Constraint1)"
-new_node_id = createADMMNodeID(original_edge_id)
-# Returns: "ADMMNodeConvertedFromEdge(TwoBlockEdge(Constraint1))"
-
-multiblock_edge_id = "MultiblockEdge(Constraint2, Block1)"  
-aux_node_id = createADMMNodeID(multiblock_edge_id)
-# Returns: "ADMMNodeConvertedFromEdge(MultiblockEdge(Constraint2, Block1))"
-```
-
-# Implementation Notes
-- The generated ID uniquely identifies the auxiliary node
-- The ID preserves traceability back to the original edge
-- Used consistently across edge splitting operations
-- Prevents ID conflicts with original variable and constraint nodes
-
-# Related Functions
-- `createADMMEdgeID`: Creates IDs for new edges connected to split nodes
-- `ADMMBipartiteGraph`: Uses this function during edge splitting operations
+- `String`: `ADMMNodeConvertedFromEdge(<edgeID>)`.
 """
 function createADMMNodeID(edgeID::String)
     return "ADMMNodeConvertedFromEdge($edgeID)"
@@ -180,58 +58,14 @@ end
 """
     createADMMEdgeID(edgeID::String, nodeID::String) -> String
 
-Generate a unique edge ID for a new edge created when splitting an original edge during bipartization.
-
-When an original edge is split to maintain bipartite structure, it is replaced by two or more new edges
-that connect through an auxiliary node. This function creates consistent IDs for these new edges.
+Create the ADMM edge ID for an edge produced by splitting `edgeID`.
 
 # Arguments
 - `edgeID::String`: The original edge ID from the MultiblockGraph that was split
 - `nodeID::String`: The ID of the node that this new edge connects to (either original node or auxiliary node)
 
 # Returns
-- A string ID for the new ADMM edge following the pattern "ADMMEdgeSplittedFrom(edgeID, nodeID)"
-
-# Usage
-This function is used internally during edge splitting operations when:
-- An original TWO_BLOCK_EDGE is split into two edges through an auxiliary node
-- A MULTIBLOCK_EDGE is split to resolve bipartite violations
-- Multiple new edges need to be created with consistent, traceable naming
-
-# Edge Splitting Scenarios
-1. **TWO_BLOCK_EDGE Split**: Original edge (node1, node2) becomes:
-   - Edge1: (node1, auxNode) with ID "ADMMEdgeSplittedFrom(originalEdgeID, node1)"
-   - Edge2: (node2, auxNode) with ID "ADMMEdgeSplittedFrom(originalEdgeID, node2)"
-
-2. **MULTIBLOCK_EDGE Split**: Original edge (varNode, constrNode) becomes:
-   - Edge1: (varNode, auxNode) with ID "ADMMEdgeSplittedFrom(originalEdgeID, varNode)"
-   - Edge2: (constrNode, auxNode) with ID "ADMMEdgeSplittedFrom(originalEdgeID, constrNode)"
-
-# Examples
-```julia
-# Splitting a two-block edge
-original_edge = "TwoBlockEdge(Constraint1)"
-edge1_id = createADMMEdgeID(original_edge, "VariableNode(Block1)")
-# Returns: "ADMMEdgeSplittedFrom(TwoBlockEdge(Constraint1), VariableNode(Block1))"
-
-edge2_id = createADMMEdgeID(original_edge, "VariableNode(Block2)")  
-# Returns: "ADMMEdgeSplittedFrom(TwoBlockEdge(Constraint1), VariableNode(Block2))"
-
-# Connection to auxiliary node
-aux_node_id = "ADMMNodeConvertedFromEdge(TwoBlockEdge(Constraint1))"
-aux_edge_id = createADMMEdgeID(original_edge, aux_node_id)
-# Returns: "ADMMEdgeSplittedFrom(TwoBlockEdge(Constraint1), ADMMNodeConvertedFromEdge(...))"
-```
-
-# Implementation Notes
-- Preserves full traceability back to the original edge and connected node
-- Ensures unique IDs even when multiple edges are created from the same original edge
-- Used consistently across all edge splitting operations
-- Enables reconstruction of the splitting history for debugging and analysis
-
-# Related Functions
-- `createADMMNodeID`: Creates IDs for auxiliary nodes in edge splits
-- `ADMMBipartiteGraph`: Uses this function extensively during bipartization
+- `String`: `ADMMEdgeSplittedFrom(<edgeID>, <nodeID>)`.
 """
 function createADMMEdgeID(edgeID::String, nodeID::String)
     return "ADMMEdgeSplittedFrom($edgeID, $nodeID)"
@@ -240,20 +74,12 @@ end
 """
     ADMMBipartiteGraph
 
-A bipartite graph representation specifically designed for the Alternating Direction Method of Multipliers (ADMM) algorithm.
-
-This structure transforms a general multiblock optimization problem into a bipartite graph that enables
-efficient ADMM decomposition. The bipartite structure ensures that variables can be updated in alternating
-fashion between the two partitions, which is essential for ADMM convergence properties.
+A bipartite graph representation used by ADMM.
 
 # Fields
-- `nodes::Dict{String, ADMMNode}`: Dictionary mapping node IDs to ADMMNode objects
-  - Contains original variable nodes, constraint nodes, and auxiliary split nodes
-  - Each node has associated optimization functions and partition assignment
-- `edges::Dict{String, ADMMEdge}`: Dictionary mapping edge IDs to ADMMEdge objects
-  - Represents linear constraints between nodes in the bipartite graph
-  - Each edge defines coupling relationships for ADMM algorithm
-- `mbpBlockID2admmNodeID::Dict{BlockID, String}`: Mapping from original MultiblockProblem block IDs to ADMM node IDs
+- `nodes::Dict{String, ADMMNode}`: ADMM graph nodes.
+- `edges::Dict{String, ADMMEdge}`: ADMM graph edges.
+- `mbpBlockID2admmNodeID::Dict{BlockID, String}`: Mapping from original block IDs to ADMM node IDs.
   - Enables traceability between original problem formulation and ADMM representation
   - Used for solution extraction and result interpretation
 - `left::Vector{String}`: Node IDs assigned to the left partition (typically assignment = 0)

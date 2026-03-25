@@ -540,7 +540,7 @@ function updateGammaAndDual!(solver::AdaptiveLinearizedSolver, info::ADMMIterati
     
 
     # Update Dual and save u^{k+1} to info.Sol
-    for edgeID in collect(keys(info.dualSol))
+    for edgeID in info.edgeIDs
         axpy!(
             solver.r * solver.proximalStepsizeGamma,
             solver.dualBuffer[edgeID],
@@ -593,7 +593,7 @@ the most current information for optimal performance.
 - Critical for maintaining gradient history consistency
 """
 function update!(solver::AdaptiveLinearizedSolver, info::ADMMIterationInfo, admmGraph::ADMMBipartiteGraph, rhoUpdated::Bool)
-    @threads for edgeID in collect(keys(info.dualSol))
+    @threads for edgeID in info.edgeIDs
         copyto!(info.dualSolPrev[edgeID], info.dualSol[edgeID])
     end 
     updateGammaAndDual!(solver, info, admmGraph)

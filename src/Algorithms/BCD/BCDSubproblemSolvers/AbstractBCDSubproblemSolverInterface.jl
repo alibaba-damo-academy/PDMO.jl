@@ -4,40 +4,17 @@
                param::BCDParam, 
                info::BCDIterationInfo)
 
-Initialize the BCD subproblem solver with problem data and algorithm state.
+Initialize solver state before BCD iterations.
 
-This method is called once before the main BCD iterations begin. It allows solvers
-to perform preprocessing, validate problem structure, allocate workspace, and set up
-any solver-specific data structures.
-
-**Arguments**
+# Arguments
 - `solver::AbstractBCDSubproblemSolver`: The solver instance to initialize
 - `mbp::MultiblockProblem`: The complete multiblock problem definition
 - `param::BCDParam`: Algorithm parameters including tolerances and solver settings
 - `info::BCDIterationInfo`: Initial iteration information and solution state
 
-**Required Implementation**
-Every concrete BCD subproblem solver MUST implement this method. The implementation
-should handle:
+Concrete solver types should implement this method.
 
-1. **Problem Structure Analysis**: Examine the multiblock problem structure
-2. **Workspace Allocation**: Pre-allocate any buffers or temporary variables
-3. **Preprocessing**: Compute expensive quantities that can be reused
-4. **Validation**: Check that the solver can handle the given problem type
-5. **Solver Setup**: Initialize any solver-specific parameters or models
-
-
-**Error Handling**
-- Throw descriptive errors for unsupported problem types
-- Validate input dimensions and constraints
-- Check for required dependencies (e.g., JuMP, optimization solvers)
-
-**Performance Considerations**
-- Amortize expensive computations across all iterations
-- Pre-allocate all workspace to avoid allocations in solve!
-- Cache problem structure information for fast access
-
-See also: `solve!`, `update!`, `MultiblockProblem`, `BCDParam`
+See also: `solve!`, `updateDualResidual!`
 """
 function initialize!(solver::AbstractBCDSubproblemSolver, 
     mbp::MultiblockProblem, 
@@ -54,59 +31,18 @@ end
            param::BCDParam, 
            info::BCDIterationInfo)
 
-Solve the BCD subproblem for a specific block.
+Solve one block subproblem and update `info.solution[blockIndex]`.
 
-This is the core method that every concrete BCD subproblem solver MUST implement.
-It solves the optimization subproblem for the specified block while keeping all
-other blocks fixed at their current values.
-
-**Mathematical Problem**
-The method solves:
-```math
-\\min_{x_i} f(x_1, ..., x_{i-1}, x_i, x_{i+1}, ..., x_n) + g_i(x_i)
-\\text{ subject to } x_i \\in X_i
-```
-
-where:
-- `f` is the coupling function from `mbp.couplingFunction`
-- `g_i` is the block function from `mbp.blockVariables[blockIndex]`
-- `X_i` are the constraints from `mbp.blockVariables[blockIndex]`
-- Other blocks `x_j` (j ≠ i) are fixed at `info.solution[j]`
-
-**Arguments**
+# Arguments
 - `solver::AbstractBCDSubproblemSolver`: The solver instance
 - `blockIndex::Int64`: Index of the block to update (1-based)
 - `mbp::MultiblockProblem`: Complete multiblock problem definition
 - `param::BCDParam`: Algorithm parameters and solver settings
 - `info::BCDIterationInfo`: Current iteration state and solution
 
-**Required Implementation Behavior**
-1. **Extract Current State**: Get current values of all blocks from `info.solution`
-2. **Set Up Subproblem**: Formulate the optimization problem for block `blockIndex`
-3. **Solve**: Use solver-specific method to find optimal block value
-4. **Update Solution**: Store new block value in `info.solution[blockIndex]`
-5. **Compute Dual Residual**: Fill `info.buffer` with the dual residual corresponding to this block
-6. **Record Metadata**: Update any relevant fields in `info` (timing, iterations, etc.)
+Concrete solver types should implement this method.
 
-**Error Handling**
-- Handle numerical instability gracefully
-- Provide informative error messages for debugging
-- Fall back to previous solution if solve fails critically
-- Log warnings for suboptimal convergence
-
-**Performance Requirements**
-- Minimize memory allocations during repeated calls
-- Reuse pre-allocated workspace from `initialize!`
-- Avoid expensive computations that could be cached
-- Update solution in-place when possible
-
-**Side Effects**
-- MUST update `info.solution[blockIndex]` with the new block value
-- MUST fill `info.buffer` with the dual residual corresponding to this block
-- MAY update other fields in `info` for tracking/debugging
-- SHOULD NOT modify `mbp` or `param`
-
-See also: `initialize!`, `update!`, `MultiblockProblem`, `BCDIterationInfo`
+See also: `initialize!`, `updateDualResidual!`
 """
 function solve!(solver::AbstractBCDSubproblemSolver, blockIndex::Int64, 
     mbp::MultiblockProblem, 
@@ -120,7 +56,7 @@ end
 """
     updateDualResidual!(solver::AbstractBCDSubproblemSolver, mbp::MultiblockProblem, param::BCDParam, info::BCDIterationInfo)
 
-Update dual residuals after all blocks have been solved in a BCD iteration.
+Update BCD dual residual metrics after block updates.
 """
 function updateDualResidual!(solver::AbstractBCDSubproblemSolver, 
     mbp::MultiblockProblem, 

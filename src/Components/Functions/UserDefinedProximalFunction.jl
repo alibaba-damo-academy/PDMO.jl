@@ -3,47 +3,32 @@
 
 Wrapper for user-defined functions that have a proximal operator.
 
-This allows users to define custom functions by providing both the function evaluation
-and its proximal operator, enabling integration with proximal algorithms.
+This type lets users inject custom proximal-ready functions by providing both value
+and proximal callbacks.
 
 # Arguments
-- `func::Function`: Function evaluation f(x) → Float64
-- `proximalFunc::Function`: Proximal operator (x, γ) → result
+- `func::Function`: Function evaluation callback `f(x) -> Real`.
+- `proximalFunc::Function`: Proximal callback `(x, gamma) -> prox`.
 - `convex::Bool=true`: Whether the function is convex
 
 # Properties
 - **Smooth**: No, proximal functions are typically non-smooth
-- **Convex**: User-specified (default true)
+- **Convex**: Instance-specific (`isConvex(f)` returns the stored `convex` flag)
 - **Proximal**: Yes, by definition
 
-# Mathematical Properties
-- **Function evaluation**: f(x) provided by user
-- **Proximal operator**: prox_γf(x) provided by user
-
-# L1 Norm Function
-# f(x) = λ||x||₁ (L1 norm with coefficient λ)
-λ = 0.5
-func = x -> λ * sum(abs.(x))
-proximalFunc = (x, gamma) -> sign.(x) .* max.(abs.(x) .- gamma * λ, 0.0)  # Soft thresholding
-# Indicator Function of Box Constraints
-# f(x) = I_{[a,b]}(x) (indicator function of box [a,b])
-a, b = -1.0, 1.0
-func = x -> all(a .<= x .<= b) ? 0.0 : Inf
-proximalFunc = (x, gamma) -> clamp.(x, a, b)  # Projection onto box
-# Custom Regularization Function
-# f(x) = α * g(x) where g has known proximal operator
-α = 0.1
-func = x -> α * myCustomFunction(x)
-proximalFunc = (x, gamma) -> myCustomProximal(x, gamma * α)
-# Integration with Bipartization
-```julia
-# In your optimization problems
-block_x = BlockVariable(xID)
 # Requirements
 - `func(x)` must return a Float64 value
-- `proximalFunc(x, gamma)` must return a result of the same type as x
+- `proximalFunc(x, gamma)` must return a value with shape compatible with `x`
 - Both functions must be consistent with the mathematical definition
 - The proximal operator must satisfy: prox_γf(x) = argmin_z { f(z) + (1/(2γ))||z - x||² }
+
+# Example
+```julia
+lambda = 0.5
+func = x -> lambda * sum(abs.(x))
+proximalFunc = (x, gamma) -> sign.(x) .* max.(abs.(x) .- gamma * lambda, 0.0)
+g = UserDefinedProximalFunction(func, proximalFunc, true)
+```
 """
 struct UserDefinedProximalFunction <: AbstractFunction
     func::Function

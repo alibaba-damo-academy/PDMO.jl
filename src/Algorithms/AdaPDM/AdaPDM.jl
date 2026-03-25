@@ -6,76 +6,21 @@ include("AdaPDMUtil.jl")
 """
     AdaptivePrimalDualMethod(mbp::MultiblockProblem, param::AbstractAdaPDMParam)
 
-Internal implementation of the Adaptive Primal-Dual Method for solving composite optimization problems.
-
-This function implements the core algorithm for various adaptive primal-dual methods. It is the internal
-implementation called by the public `runAdaPDM` function. The method solves composite problems of the form:
-
-    minimize f₁(x₁) + g₁(x₁) + ... + fₙ(xₙ) + gₙ(xₙ) + h(A₁x₁ + ... + Aₙxₙ)
-
-where fᵢ are smooth convex functions and gᵢ are proximable convex functions.
-
-# Mathematical Formulation
-The method assumes the problem is formulated as a multiblock problem:
-
-    minimize f₁(x₁) + g₁(x₁) + ... + fₙ(xₙ) + gₙ(xₙ) + g_{n+1}(x_{n+1})
-    subject to A₁x₁ + ... + Aₙxₙ - x_{n+1} = 0
-
-where:
-- f₁, ..., fₙ are smooth convex functions with gradient oracles
-- g₁, ..., gₙ are proximable convex functions with proximal oracles  
-- h = g_{n+1} is a proximable convex function representing the coupling constraint
+Internal AdaPDM loop used by `runAdaPDM`.
 
 # Arguments
-- `mbp::MultiblockProblem`: The composite multiblock optimization problem
-- `param::AbstractAdaPDMParam`: Algorithm parameters, can be one of:
-  - `AdaPDMParam`: Standard adaptive primal-dual method
-  - `AdaPDMPlusParam`: Enhanced AdaPDM with line search
-  - `MalitskyPockParam`: Malitsky-Pock algorithm with backtracking
-  - `CondatVuParam`: Condat-Vũ algorithm with fixed step sizes
+- `mbp::MultiblockProblem`: Composite multiblock problem.
+- `param::AbstractAdaPDMParam`: Parameter object selecting the algorithm variant
+  (`AdaPDMParam`, `AdaPDMPlusParam`, `MalitskyPockParam`, or `CondatVuParam`).
 
 # Returns
-- `AdaPDMIterationInfo`: Complete iteration information including:
-  - Primal and dual solutions
-  - Convergence history (residuals and objective values)
-  - Timing information
-  - Termination status
-
-# Algorithm Steps
-1. **Validation**: Checks if the problem has composite structure
-2. **Initialization**: Sets up iteration info and termination criteria
-3. **Iteration Loop**: For each iteration:
-   - Update dual solution using algorithm-specific rules
-   - Update primal solutions using proximal operators
-   - Compute residuals and objective values
-   - Check termination criteria
-   - Log progress information
-4. **Termination**: Returns complete iteration information
-
-# Algorithm Variants
-The function dispatches to different update rules based on the parameter type:
-- **AdaPDM**: Uses adaptive step sizes based on problem geometry
-- **AdaPDM+**: Adds line search for enhanced operator norm estimation
-- **Malitsky-Pock**: Uses backtracking line search for automatic step size selection
-- **Condat-Vũ**: Uses fixed step sizes with convergence guarantees
-
-# Threading
-The algorithm uses Julia's threading capabilities for parallel processing
-of independent block updates where possible.
-
-# Error Conditions
-- Throws an error if the problem is not a valid composite problem
-- Individual algorithms may have specific requirements (e.g., smooth functions)
-
-# Notes
-This is an internal function. Users should call `runAdaPDM` instead, which provides
-additional features like solution validation and result formatting.
+- `AdaPDMIterationInfo`: Iteration history, residuals, objective values, timing, and
+  termination status.
 
 See also: `runAdaPDM`, `AdaPDMIterationInfo`, `AdaPDMTerminationCriteria`
 """
 function AdaptivePrimalDualMethod(mbp::MultiblockProblem, param::AbstractAdaPDMParam) 
     startTime = time() 
-    nThreads = Threads.nthreads() 
 
     @PDMOInfo param.logLevel "#"^40 * " Adaptive Primal-dual Method " * "#"^40
     @PDMOInfo param.logLevel "Method = $(getAdaPDMName(param))"

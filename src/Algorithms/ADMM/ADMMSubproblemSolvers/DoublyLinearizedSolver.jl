@@ -119,16 +119,6 @@ function initialize!(solver::DoublyLinearizedSolver, admmGraph::ADMMBipartiteGra
     end 
     # @info "edge data allocation took $(time() - timeStart) seconds"
     
-    # Create assignment map
-    assignment = Dict{String, Int64}()
-    sizehint!(assignment, length(admmGraph.left) + length(admmGraph.right))
-    for nodeID in admmGraph.left
-        assignment[nodeID] = 0
-    end
-    for nodeID in admmGraph.right
-        assignment[nodeID] = 1  
-    end
-    
     # timeStart = time() 
     # estimate the Lipschitz constant of the gradient of the objective function
     for nodeID in admmGraph.left 
@@ -145,7 +135,7 @@ function initialize!(solver::DoublyLinearizedSolver, admmGraph::ADMMBipartiteGra
     # Estimate operator norms
     # timeStart = time() 
     for (edgeID, edge) in admmGraph.edges 
-        if assignment[edge.nodeID1] == 0 
+        if admmGraph.nodes[edge.nodeID1].assignment == 0
             solver.maxLeftMatrixAdjointSelfOperatorNorm = max(solver.maxLeftMatrixAdjointSelfOperatorNorm, operatorNorm2(edge.mappings[edge.nodeID1])^2)
             solver.maxRightMatrixAdjointSelfOperatorNorm = max(solver.maxRightMatrixAdjointSelfOperatorNorm, operatorNorm2(edge.mappings[edge.nodeID2])^2)
         else 
@@ -349,7 +339,7 @@ function updateDualResidualsInBuffer!(solver::DoublyLinearizedSolver,
     # if dualStepsize != 1.0, add additional term: 
     # add (dualStepsize - 1) * rho * A'(Ax^{k+1} + By^{k+1} -b) to info.primalBuffer
     if abs(solver.dualStepsize - 1.0) > ZeroTolerance 
-        @threads for edgeID in collect(keys(info.dualSol))
+        @threads for edgeID in info.edgeIDs
             edge = admmGraph.edges[edgeID]
             nodeID1 = edge.nodeID1
             nodeID2 = edge.nodeID2

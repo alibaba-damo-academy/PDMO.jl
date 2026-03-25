@@ -47,7 +47,6 @@ end
 """
 function BCD(mbp::MultiblockProblem, param::BCDParam)
     startTime = time()
-    nThreads = Threads.nthreads()
 
     @PDMOInfo param.logLevel "#"^40 * " Block Coordinate Descent " * "#"^40
     

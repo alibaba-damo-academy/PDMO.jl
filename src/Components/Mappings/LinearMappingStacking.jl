@@ -178,13 +178,18 @@ function adjoint!(L::LinearMappingStacking, y::NumericVariable, ret::NumericVari
     @assert sy[1] == sum(L.sizeAlongFirstDimension) "LinearMappingStacking (adjoint!): size(y,1) must equal sum(sizeAlongFirstDimension)."
 
     # A = [A1; A2; ...], so A' y = sum_i A_i' y_i
-    if add == false
-        ret .= 0.0
-    end
-
     tail = ndims(y) == 1 ? () : ntuple(_ -> Colon(), ndims(y) - 1)
     startIdx = 1
-    for k in 1:length(L.mappings)
+    # First block honors the caller's `add` semantics.
+    endIdx = L.sizeAlongFirstDimension[1]
+    if ndims(y) == 1
+        @views adjoint!(L.mappings[1], y[startIdx:endIdx], ret, add)
+    else
+        @views adjoint!(L.mappings[1], y[startIdx:endIdx, tail...], ret, add)
+    end
+
+    startIdx = endIdx + 1
+    for k in 2:length(L.mappings)
         endIdx = startIdx + L.sizeAlongFirstDimension[k] - 1
         if ndims(y) == 1
             @views adjoint!(L.mappings[k], y[startIdx:endIdx], ret, true)
@@ -217,7 +222,7 @@ function adjoint(L::LinearMappingStacking, y::NumericVariable)
     endIdx = L.sizeAlongFirstDimension[1]
     tail = ndims(y) == 1 ? () : ntuple(_ -> Colon(), ndims(y) - 1)
     y1 = ndims(y) == 1 ? (@views y[startIdx:endIdx]) : (@views y[startIdx:endIdx, tail...])
-    ret = adjoint(L.mappings[1], y1)
+    ret = copy(adjoint(L.mappings[1], y1))
 
     # Accumulate remaining blocks in-place.
     startIdx = endIdx + 1

@@ -26,15 +26,15 @@ n~\textbf{Block Variables} \quad & m~\textbf{ Block Constraints} \quad & \textbf
 ```
 
 More specifically, 
-- For each $j = 1,\cdots,n$, a `BlockVariable` $x_j$ represents a numeric array (i.e., scalar, vector, matrix, etc.), and is associated with two objective functions: 
+- For each $j\in \{1,\cdots,n\}$, a `BlockVariable` $x_j$ represents a numeric array (i.e., scalar, vector, matrix, etc.), and is associated with two objective functions: 
     - each $f_j$ is differentiable, and $f_j(\cdot)$ and $\nabla f_j(\cdot)$ are available; 
     - each $g_j$ is proximable, and $g_j(\cdot)$ and $\text{prox}_{\gamma g_j}(\cdot)$ are available.
-- For each $i = 1,\cdots,m$, a `BlockConstraint` is defined by some linear operators and a right-hand side array: 
+- For each $i \in \{1,\cdots,m\}$, a `BlockConstraint` is defined by some linear operators and a right-hand side array: 
     - the linear operator $\mathbf{A}_{i,j}$ is **non-zero** if and only if constraint $i$ involves blocks $x_j$;
     - the adjoint operator of $\mathbf{A}_{i,j}$ is available;
     - the right-hand side $b_i$ can be a numeric array of any shape. 
 - Additionally, there might exist a smooth function $F$ that couples all BlockVariables:
-    - we assume that $F(\cdot)$, $\nabla F(\cdot)$,  and $\nabla_j F(\cdot)$'s are available.
+    - we assume that $F(\cdot)$, $\nabla F(\cdot)$,  and $\nabla_j F(\cdot)$'s for $j\in \{1,\cdots, n\}$ are available.
     
 ## Available Algorithms
 
@@ -51,7 +51,13 @@ More specifically,
     - Accelerators, e.g., Halpern (with or without restart), Filtered Anderson
 
 - **Adaptive Primal-Dual Method (AdaPDM)**
+
   - A suite of efficient and adaptive methods for problems with simpler coupling.
+  ```math 
+  \begin{aligned}
+    \min_{\mathbf{x}} \quad & \sum_{j=1}^{n-1} \left( f_j(x_j) + g_j(x_j) \right) + g_n(\mathbf{A}_{1,1}x_1 + \cdots + \mathbf{A}_{1,n-1}x_{n-1})
+  \end{aligned}
+  ```
   - Various methods can be selected : 
     - Original Condat-Vũ Method (Condat 2013, Vũ 2013)
     - Adaptive Primal-Dual Method & Plus (Latafat et al. 2024)
@@ -74,7 +80,7 @@ More specifically,
 Before official release, we recommend the following practice to download and use ```PDMO.jl```. 
 
 ### Project Setup
-Download the project. From where ```PDMO.jl``` is located, run:
+Download the project. From the parent directory that contains `PDMO.jl`, run:
 ```bash 
 julia PDMO.jl/warmup.jl
 ```
@@ -86,8 +92,12 @@ For enhanced performance, you can optionally use linear solvers from [HSL](https
 
 This will set up all required dependencies and configure HSL if available.
 
-After successful setup, activate the project
-```julia 
+After successful setup, run Julia with the project environment:
+```bash
+julia --project=.
+```
+Then load the package:
+```julia
 using PDMO
 ``` 
 
@@ -103,7 +113,7 @@ We use the Dual Square Root LASSO as a beginning example:
 ```
 where $(A, b, \lambda)$ are given problem data of proper dimensions. 
 
-To begin with, load ```PDMO.jl``` and other necessary packages.
+To begin with, start Julia from the repository root with `--project=.` and load `PDMO.jl` with other necessary packages.
 ```julia
 using PDMO
 using LinearAlgebra

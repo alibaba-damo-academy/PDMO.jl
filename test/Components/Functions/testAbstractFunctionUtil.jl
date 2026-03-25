@@ -159,4 +159,5 @@ include("../../test_helper.jl")
         prox_conj2 = proximalOracleOfConjugate(box_func, x2, γ)
         @test norm(prox_conj1 - prox_conj2) ≤ norm(x1 - x2) + 1e-10
     end
+
 end 

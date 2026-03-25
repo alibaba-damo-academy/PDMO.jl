@@ -244,14 +244,23 @@ function adjoint(mapping1::AbstractMapping, mapping2::AbstractMapping)
         return LinearMappingIdentity(mapping1.coe * mapping2.coe)
     end 
     
-    if isa(mapping1, LinearMappingExtraction) && isa(mapping2, LinearMappingExtraction) && 
-       mapping1.dim == mapping2.dim && 
-       mapping1.indexStart == mapping2.indexStart && 
+    if isa(mapping1, LinearMappingExtraction) && isa(mapping2, LinearMappingExtraction) &&
+       mapping1.dim == mapping2.dim &&
+       mapping1.indexStart == mapping2.indexStart &&
        mapping1.indexEnd == mapping2.indexEnd
-        return LinearMappingExtraction(mapping1.dim, 
-            mapping1.coe * mapping2.coe, 
-            mapping1.indexStart, 
-            mapping1.indexEnd)
+        # A = c1*E, B = c2*E where E extracts the same slice.
+        # A'B = c1*c2*E'E, which is a projection in the original space.
+        # For vector domains, represent E'E explicitly as a sparse diagonal matrix mapping.
+        if length(mapping1.dim) == 1
+            n = mapping1.dim[1]
+            idx = mapping1.indexStart:mapping1.indexEnd
+            coeff = mapping1.coe * mapping2.coe
+            rows = collect(idx)
+            cols = collect(idx)
+            vals = fill(coeff, length(idx))
+            return LinearMappingMatrix(sparse(rows, cols, vals, n, n))
+        end
+        return NullMapping()
     end 
 
     if isa(mapping1, LinearMappingIdentity) && isa(mapping2, LinearMappingMatrix)

@@ -5,8 +5,8 @@ A quadratic multiblock function of the form:
 f(x₁, x₂, ..., xₙ) = xᵀ Q x + qᵀ x + r
 
 where x = [x₁; x₂; ...; xₙ] is the concatenated vector of all blocks,
-Q is a positive semidefinite matrix, q is a linear coefficient vector,
-and r is a scalar constant.
+Q is a (typically symmetric) quadratic coefficient matrix, q is a linear coefficient
+vector, and r is a scalar constant.
 
 # Fields
 - `Q::AbstractMatrix{Float64}`: Quadratic coefficient matrix (n×n where n is total dimension)
@@ -15,6 +15,10 @@ and r is a scalar constant.
 - `blockDims::Vector{Int}`: Dimensions of each block [dim₁, dim₂, ..., dimₙ]
 - `buffer::Vector{Float64}`: Pre-allocated buffer for concatenated vector (for efficiency)
 - `blockIndices::Vector{UnitRange{Int}}`: Precomputed mapping from block index to indices in concatenated vector
+
+# Constructor Behavior
+- If `Q` is not symmetric (within tolerance), it is symmetrized as `(Q + Q')/2`.
+- Positive semidefiniteness is not explicitly enforced by the constructor.
 
 # Mathematical Form
 The function evaluates to:
@@ -111,6 +115,7 @@ Uses copyto! for each block which is much more efficient than element-by-element
 """
 function _copyBlocksToBuffer!(buffer::Vector{Float64}, x::Vector{NumericVariable}, blockIndices::Vector{UnitRange{Int}})
     for i in 1:length(x)
+        @assert isa(x[i], Number) == false "QuadraticMultiblockFunction: scalar blocks are not supported; use length-1 arrays"
         xi_vec = vec(x[i])  # Ensure it's a vector
         blockIdx = blockIndices[i]
         @assert length(xi_vec) == length(blockIdx) "Block $i size mismatch: expected $(length(blockIdx)), got $(length(xi_vec))"
@@ -311,6 +316,10 @@ The concatenated gradient computation is more efficient than the block-based app
 for this signature since we can directly compute: ∇f(x) = 2 Q x + q.
 """
 function gradientOracle!(grad::NumericVariable, f::QuadraticMultiblockFunction, x::NumericVariable, enableParallel::Bool=false)
+    @assert isa(x, Number) == false "QuadraticMultiblockFunction: concatenated gradient API requires array input"
+    @assert isa(grad, Number) == false "QuadraticMultiblockFunction: concatenated gradient API requires array output"
+    @assert length(x) == sum(f.blockDims) "Input dimension mismatch: expected $(sum(f.blockDims)), got $(length(x))"
+    @assert length(grad) == length(x) "Output dimension mismatch: expected $(length(x)), got $(length(grad))"
     # Direct computation using concatenated format: ∇f(x) = 2 Q x + q
     grad .= 2 * (f.Q * x) + f.q
 end
@@ -378,6 +387,7 @@ function validateBlockDimensions(f::QuadraticMultiblockFunction, x::Vector{Numer
     @assert length(x) == length(f.blockDims) "Number of blocks mismatch: expected $(length(f.blockDims)), got $(length(x))"
     
     for i in 1:length(x)
+        @assert isa(x[i], Number) == false "Block $i is scalar; scalar blocks are not supported. Use a length-1 array."
         @assert length(x[i]) == f.blockDims[i] "Block $i dimension mismatch: expected $(f.blockDims[i]), got $(length(x[i]))"
     end
 end

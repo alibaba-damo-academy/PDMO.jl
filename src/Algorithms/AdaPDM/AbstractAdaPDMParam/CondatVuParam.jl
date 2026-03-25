@@ -155,7 +155,9 @@ function CondatVuParam(mbp::MultiblockProblem;
     if LipschitzConstantEstimateProvided < Inf 
         LipschitzConstantEstimate = LipschitzConstantEstimateProvided 
     else 
-        for block in mbp.blocks[1:end-1]
+        nPrimalBlocks = length(mbp.blocks) - 1
+        for bi in 1:nPrimalBlocks
+            block = mbp.blocks[bi]
             LipschitzConstantEstimate = max(LipschitzConstantEstimate, estimateLipschitzConstant(block.f, block.val))
         end 
     end 

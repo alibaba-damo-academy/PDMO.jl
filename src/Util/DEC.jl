@@ -122,8 +122,8 @@ function parseDEC(A::SparseMatrixCSC,
             end
         end
 
-        # Convert column sets to vectors
-        mapBlock2Columns = Dict{Int, Vector{Int}}(bid => collect(cols) for (bid, cols) in mapBlock2ColumnsSet)
+        # Convert column sets to deterministically ordered vectors
+        mapBlock2Columns = Dict{Int, Vector{Int}}(bid => sort!(collect(cols)) for (bid, cols) in mapBlock2ColumnsSet)
 
         # Ensure block IDs are consecutive and increasing (keep 0 if present)
         all_ids = sort(collect(union(keys(mapBlock2Rows), keys(mapBlock2Columns))))
@@ -155,6 +155,24 @@ function parseDEC(A::SparseMatrixCSC,
             mapBlock2Columns = newCols
 
             numberBlocks = length(nonzero_ids)
+        end
+
+        # If NBLOCKS is missing/malformed, infer from observed block IDs.
+        # If NBLOCKS disagrees with observed data, trust observed data and report.
+        observedBlocks = length(nonzero_ids)
+        if numberBlocks <= 0
+            numberBlocks = observedBlocks
+        elseif numberBlocks != observedBlocks
+            @PDMOInfo logLevel "DEC: NBLOCKS mismatch; using observed block count" declared=numberBlocks observed=observedBlocks
+            numberBlocks = observedBlocks
+        end
+
+        # Ensure deterministic, duplicate-free row/column lists for each block
+        for (bid, rows) in mapBlock2Rows
+            mapBlock2Rows[bid] = sort!(unique(rows))
+        end
+        for (bid, cols) in mapBlock2Columns
+            mapBlock2Columns[bid] = sort!(unique(cols))
         end
 
         # Summary logging (non-distributed build equivalent)

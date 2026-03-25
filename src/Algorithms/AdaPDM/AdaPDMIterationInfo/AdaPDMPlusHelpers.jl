@@ -34,6 +34,7 @@ function updateDualSolution!(mbp::MultiblockProblem, info::AdaPDMIterationInfo, 
     newGamma = 0.0 
     sigma = 0.0
     mappings = mbp.constraints[1].mappings
+    nPrimalBlocks = length(mbp.blocks) - 1
     
     countBacktracks = 0 
     for iter in 1:param.lineSearchMaxIter
@@ -59,7 +60,8 @@ function updateDualSolution!(mbp::MultiblockProblem, info::AdaPDMIterationInfo, 
 
         denominator = norm(info.dualBuffer, 2) # norm of dual difference 
         numerator = 0.0 
-        for block in mbp.blocks[1:end-1]
+        for bi in 1:nPrimalBlocks
+            block = mbp.blocks[bi]
             adjoint!(mappings[block.id], info.dualBuffer, info.primalBuffer1[block.id])
             numerator += dot(info.primalBuffer1[block.id], info.primalBuffer1[block.id])
         end 
@@ -105,8 +107,9 @@ over all blocks except the last one, which corresponds to the dual variable.
 function updatePrimalSolution!(mbp::MultiblockProblem, 
     info::AdaPDMIterationInfo, 
     param::AdaPDMPlusParam)
-    @threads for block in mbp.blocks[1:end-1]
-        updatePrimalSolution!(block, mbp, info)
+    nPrimalBlocks = length(mbp.blocks) - 1
+    @threads for bi in 1:nPrimalBlocks
+        updatePrimalSolution!(mbp.blocks[bi], mbp, info)
     end 
 end 
 

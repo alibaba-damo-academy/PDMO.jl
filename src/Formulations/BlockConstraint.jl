@@ -191,6 +191,10 @@ Compute the L2 norm of the constraint violation.
 - Uses `blockConstraintViolationL2Norm!` for the computation.
 """
 function blockConstraintViolationL2Norm(constr, x::Dict{BlockID, NumericVariable}) 
+    if isa(constr.rhs, Number)
+        res = blockConstraintViolation(constr, x)
+        return abs(res)
+    end
     return blockConstraintViolationL2Norm!(constr, x, similar(constr.rhs))
 end 
 
@@ -233,6 +237,10 @@ Compute the L-infinity norm of the constraint violation.
 - Uses `blockConstraintViolationLInfNorm!` for the computation.
 """
 function blockConstraintViolationLInfNorm(constr, x::Dict{BlockID, NumericVariable}) 
+    if isa(constr.rhs, Number)
+        res = blockConstraintViolation(constr, x)
+        return abs(res)
+    end
     return blockConstraintViolationLInfNorm!(constr, x, similar(constr.rhs))
 end 
 
@@ -257,8 +265,13 @@ function checkConstraintsViolation(constraints::Vector{BlockConstraint}, x::Dict
     presLinf = 0.0
     for constr in constraints 
         res = blockConstraintViolation(constr, x)
-        presL2 += dot(res, res) 
-        presLinf = max(presLinf, norm(res, Inf))
+        if isa(res, Number)
+            presL2 += res * res
+            presLinf = max(presLinf, abs(res))
+        else
+            presL2 += dot(res, res) 
+            presLinf = max(presLinf, norm(res, Inf))
+        end
     end 
     presL2 = sqrt(presL2)
     return presL2, presLinf

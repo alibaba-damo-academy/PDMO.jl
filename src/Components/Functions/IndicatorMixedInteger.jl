@@ -33,6 +33,23 @@ isSupportedByJuMP(f::Type{<:IndicatorMixedInteger}) = true
 
 # function value
 function (f::IndicatorMixedInteger)(x::NumericVariable, enableParallel::Bool=false)
+    if isa(x, Number)
+        if length(f.lb) != 1
+            error("IndicatorMixedInteger: scalar input requires scalar (length-1) bounds")
+        end
+        if x < f.lb[1] - FeasTolerance || x > f.ub[1] + FeasTolerance
+            return Inf
+        end
+        if f.isInteger[1] && abs(x - round(x)) > FeasTolerance
+            return Inf
+        end
+        return 0.0
+    end
+
+    if length(x) != length(f.lb)
+        error("IndicatorMixedInteger: input dimension must match bounds dimension")
+    end
+
     for k in eachindex(x)
         lb = f.lb[k]
         ub = f.ub[k]
@@ -52,9 +69,13 @@ end
 
 
 function proximalOracle!(y::NumericVariable, f::IndicatorMixedInteger, x::NumericVariable, gamma::Float64 = 1.0, enableParallel::Bool=false)
-    # if isa(x, Number)
-    #     error("IndicatorMixedInteger: proximal oracle does not support in-place operations for scalar inputs.")
-    # end
+    if isa(x, Number)
+        error("IndicatorMixedInteger: proximal oracle does not support in-place operations for scalar inputs.")
+    end
+
+    if length(x) != length(f.lb) || length(y) != length(f.lb)
+        error("IndicatorMixedInteger: input/output dimensions must match bounds dimension")
+    end
 
     y .= clamp.(x, f.lb, f.ub)
 
@@ -67,9 +88,18 @@ end
 
 
 function proximalOracle(f::IndicatorMixedInteger, x::NumericVariable, gamma::Float64 = 1.0, enableParallel::Bool=false)
-    # if isa(x, Number)
-    #     return x < 0.5 ? 0.0 : 1.0
-    # end
+    if isa(x, Number)
+        if length(f.lb) != 1
+            error("IndicatorMixedInteger: scalar input requires scalar (length-1) bounds")
+        end
+        y = clamp(x, f.lb[1], f.ub[1])
+        return f.isInteger[1] ? round(y) : y
+    end
+
+    if length(x) != length(f.lb)
+        error("IndicatorMixedInteger: input dimension must match bounds dimension")
+    end
+
     y = similar(x)
     proximalOracle!(y, f, x, gamma, enableParallel)
     return y

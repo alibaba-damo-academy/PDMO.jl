@@ -28,8 +28,9 @@ the change in objective value with the squared norm of the primal variable diffe
 function updatePrimalSolution!(mbp::MultiblockProblem, 
     info::AdaPDMIterationInfo, 
     param::CondatVuParam)
-    @threads for block in mbp.blocks[1:end-1]
-        updatePrimalSolution!(block, mbp, info)
+    nPrimalBlocks = length(mbp.blocks) - 1
+    @threads for bi in 1:nPrimalBlocks
+        updatePrimalSolution!(mbp.blocks[bi], mbp, info)
     end 
 end 
 

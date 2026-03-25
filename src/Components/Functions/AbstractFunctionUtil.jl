@@ -86,6 +86,7 @@ function estimateLipschitzConstant(f::AbstractFunction, x::Union{NumericVariable
     
     # For vector/matrix functions, use multiple estimation strategies
     grad2 = similar(grad1)
+    grad_diff = similar(grad1)
     perturbed = similar(x)
     direction = similar(x)
     
@@ -110,7 +111,9 @@ function estimateLipschitzConstant(f::AbstractFunction, x::Union{NumericVariable
                 axpy!(step_size, direction, perturbed)
                 gradientOracle!(grad2, f, perturbed)
                 
-                grad_diff_norm = norm(grad2 .- grad1)
+                copyto!(grad_diff, grad2)
+                axpy!(-1.0, grad1, grad_diff)
+                grad_diff_norm = norm(grad_diff)
                 if grad_diff_norm > 1e-12
                     estimate = grad_diff_norm / step_size
                     push!(estimates, estimate)
@@ -131,7 +134,9 @@ function estimateLipschitzConstant(f::AbstractFunction, x::Union{NumericVariable
                 perturbed[coord_idx] += step_size
                 gradientOracle!(grad2, f, perturbed)
                 
-                grad_diff_norm = norm(grad2 .- grad1)
+                copyto!(grad_diff, grad2)
+                axpy!(-1.0, grad1, grad_diff)
+                grad_diff_norm = norm(grad_diff)
                 if grad_diff_norm > 1e-12
                     estimate = grad_diff_norm / step_size
                     push!(estimates, estimate)
@@ -161,7 +166,9 @@ function estimateLipschitzConstant(f::AbstractFunction, x::Union{NumericVariable
             axpy!(step_size, direction, perturbed)
             gradientOracle!(grad2, f, perturbed)
             
-            grad_diff_norm = norm(grad2 .- grad1)
+            copyto!(grad_diff, grad2)
+            axpy!(-1.0, grad1, grad_diff)
+            grad_diff_norm = norm(grad_diff)
             if grad_diff_norm > 1e-12
                 estimate = grad_diff_norm / step_size
                 push!(estimates, estimate)
@@ -229,6 +236,10 @@ The function uses multiple estimation strategies adapted for multiblock structur
 For a multiblock function f(x₁, x₂, ..., xₙ), the Lipschitz constant bounds how fast
 the gradient changes. The estimation considers both intra-block and inter-block coupling
 effects by testing perturbations in individual blocks and combinations of blocks.
+
+# Errors
+- Throws `ArgumentError` if `length(x) == 1`. This API is for multiblock cases with at least two blocks.
+- For single-block problems, use `estimateLipschitzConstant` on the corresponding single-block function.
 """
 function estimateLipschitzConstantMultiblock(f::AbstractMultiblockFunction, x::Vector{NumericVariable};
     maxTrials::Int=50, minStepSize::Float64=1e-6, maxStepSize::Float64=1.0)
@@ -238,11 +249,15 @@ function estimateLipschitzConstantMultiblock(f::AbstractMultiblockFunction, x::V
         return 2.0 * opnorm(Array(f.Q))
     end
     
+    numBlocks = length(x)
+    if numBlocks == 1
+        throw(ArgumentError("estimateLipschitzConstantMultiblock requires at least two blocks; got 1 block"))
+    end
+
     # Compute initial gradient for all blocks
     grad1 = gradientOracle(f, x)
     
     estimates = Float64[]
-    numBlocks = length(x)
     
     # Strategy 1: Block-wise perturbations (test each block individually)
     blockTrials = div(maxTrials, 3)
@@ -250,7 +265,7 @@ function estimateLipschitzConstantMultiblock(f::AbstractMultiblockFunction, x::V
         blockIdx = rand(1:numBlocks)  # Random block selection
         
         # Create perturbed copy of x
-        x_perturbed = deepcopy(x)
+        x_perturbed = copy(x)
         
         # Generate random direction for this block
         if isa(x[blockIdx], Number)
@@ -294,10 +309,12 @@ function estimateLipschitzConstantMultiblock(f::AbstractMultiblockFunction, x::V
     couplingTrials = div(maxTrials, 3)
     for trial in 1:couplingTrials
         # Randomly select 2-3 blocks to perturb
-        numBlocksToPerturb = min(numBlocks, rand(2:min(3, numBlocks)))
+        min_blocks = min(2, numBlocks)
+        max_blocks = min(3, numBlocks)
+        numBlocksToPerturb = rand(min_blocks:max_blocks)
         blocksToPerturb = randperm(numBlocks)[1:numBlocksToPerturb]
         
-        x_perturbed = deepcopy(x)
+        x_perturbed = copy(x)
         total_step_norm = 0.0
         
         for blockIdx in blocksToPerturb
@@ -354,7 +371,7 @@ function estimateLipschitzConstantMultiblock(f::AbstractMultiblockFunction, x::V
     end
     
     for trial in 1:remainingTrials
-        x_perturbed = deepcopy(x)
+        x_perturbed = copy(x)
         total_step_norm = 0.0
         
         for i in 1:numBlocks

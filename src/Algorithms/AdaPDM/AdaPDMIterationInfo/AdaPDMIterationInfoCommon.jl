@@ -15,7 +15,9 @@ function computePartialObjective!(info::AdaPDMIterationInfo, mbp::MultiblockProb
     obj = 0.0
     info.bufferAx .= 0.0
     mappings = mbp.constraints[1].mappings
-    for block in mbp.blocks[1:end-1]
+    nPrimalBlocks = length(mbp.blocks) - 1
+    for bi in 1:nPrimalBlocks
+        block = mbp.blocks[bi]
         obj += (block.f)(info.primalSol[block.id]) + (block.g)(info.primalSol[block.id])
         mappings[block.id](info.primalSol[block.id], info.bufferAx, true)
     end 
@@ -42,7 +44,9 @@ constant by examining the difference between current and previous iterations.
 function computeLipschitzAndCocoercivityEstimate(mbp::MultiblockProblem, info::AdaPDMIterationInfo) 
     l = 0.0 
     c = 0.0
-    for block in mbp.blocks[1:end-1]
+    nPrimalBlocks = length(mbp.blocks) - 1
+    for bi in 1:nPrimalBlocks
+        block = mbp.blocks[bi]
         # primalBuffer2 = nabla f(x^{k-1}) - nabla f(x^k)
         gradientOracle!(info.primalBuffer1[block.id], block.f, info.primalSol[block.id],)
         gradientOracle!(info.primalBuffer2[block.id], block.f, info.primalSolPrev[block.id])

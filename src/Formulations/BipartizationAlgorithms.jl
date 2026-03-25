@@ -1,77 +1,14 @@
 """ 
     BipartizationAlgorithms.jl
 
-Bipartition algorithms used to convert a multiblock graph into a bipartite graph.
-
-This module provides various algorithms for transforming general multiblock graphs into bipartite graphs,
-which is essential for certain decomposition algorithms like ADMM that require bipartite structure.
-
-# Overview
-Each algorithm takes a multiblock graph and a multiblock problem as input, and produces two key outputs:
-
-1. **Node Assignment**: Maps each node to its assigned partition (0 or 1)
-   - 0 = left partition
-   - 1 = right partition
-
-2. **Edge Splitting**: Maps each edge to splitting decisions (a, b) where:
-   - a = 0: the edge is not split (kept as original edge)
-   - a = 1: the edge is split into two edges (i, k) and (k, j) with intermediate node k
-   - b = 0: the split edge/node is assigned to the left partition
-   - b = 1: the split edge/node is assigned to the right partition
-
-# Algorithms Available
-- **MILP**: Mixed Integer Linear Programming approach (optimal but slower)
-- **BFS**: Breadth-First Search traversal (fast heuristic)
-- **DFS**: Depth-First Search traversal (fast heuristic)
-- **Spanning Tree**: Spanning tree with smart back edge processing (balanced approach)
-
-# Usage
-These algorithms are typically used as preprocessing steps for decomposition algorithms
-that require bipartite graph structure, such as ADMM-based solvers.
-
-# Mathematical Background
-A bipartite graph has the property that all nodes can be colored with two colors such that
-no two adjacent nodes have the same color. For general graphs, this may require:
-- Splitting edges (inserting intermediate nodes)
-- Carefully assigning nodes to partitions
-
-The choice of algorithm depends on the trade-off between solution quality and computational speed.
+Algorithms for converting a multiblock graph into a bipartite graph for ADMM-style
+decomposition.
 """
 
 """
     BipartizationAlgorithm
 
-An enumeration defining the available bipartization algorithms.
-
-# Values
-- `MILP_BIPARTIZATION`: Mixed Integer Linear Programming approach
-  - Optimal solution that minimizes operator norms and graph complexity
-  - Slowest but highest quality results
-  - Uses HiGHS solver for optimization
-
-- `BFS_BIPARTIZATION`: Breadth-First Search based approach
-  - Fast heuristic using BFS traversal
-  - Assigns nodes to alternating partitions
-  - Splits edges when conflicts are detected
-
-- `DFS_BIPARTIZATION`: Depth-First Search based approach  
-  - Fast heuristic using DFS traversal
-  - Similar to BFS but with different traversal order
-  - May produce different partitioning results
-
-- `SPANNING_TREE_BIPARTIZATION`: Spanning tree with smart back edge processing
-  - Balanced approach between quality and speed
-  - Builds spanning tree and processes back edges intelligently
-  - Minimizes unnecessary edge splits
-
-# Usage
-These enum values are used with `getBipartizationAlgorithmName()` and as identifiers
-for selecting bipartization algorithms in optimization routines.
-
-# Algorithm Selection Guidelines
-- Use `MILP_BIPARTIZATION` for optimal results when computational time is not critical
-- Use `BFS_BIPARTIZATION` or `DFS_BIPARTIZATION` for fast heuristic solutions
-- Use `SPANNING_TREE_BIPARTIZATION` for a good balance between speed and quality
+Enum of supported bipartization strategies.
 """
 @enum BipartizationAlgorithm begin 
     MILP_BIPARTIZATION
@@ -87,35 +24,13 @@ end
 """
     getBipartizationAlgorithmName(alg::BipartizationAlgorithm) -> String
 
-Returns a human-readable string representation of a bipartization algorithm.
+Return a stable display name for a `BipartizationAlgorithm`.
 
 # Arguments
 - `alg::BipartizationAlgorithm`: The bipartization algorithm enum value
 
 # Returns
-- A string representing the algorithm name, or "Unknown bipartization algorithm" for invalid inputs
-
-# Examples
-```julia
-alg = BFS_BIPARTIZATION
-name = getBipartizationAlgorithmName(alg)  # Returns "BFS_BIPARTIZATION"
-
-alg = MILP_BIPARTIZATION
-name = getBipartizationAlgorithmName(alg)  # Returns "MILP_BIPARTIZATION"
-```
-
-# Usage
-This function is useful for:
-- Logging and debugging (identifying which algorithm is being used)
-- User interfaces (displaying algorithm names)
-- Report generation (documenting algorithm choices)
-- Error messages and diagnostics
-
-# Supported Algorithms
-- `MILP_BIPARTIZATION` → "MILP_BIPARTIZATION"
-- `BFS_BIPARTIZATION` → "BFS_BIPARTIZATION"  
-- `DFS_BIPARTIZATION` → "DFS_BIPARTIZATION"
-- `SPANNING_TREE_BIPARTIZATION` → "SPANNING_TREE_BIPARTIZATION"
+- `String`: algorithm name.
 """
 function getBipartizationAlgorithmName(alg::BipartizationAlgorithm)
     if alg == MILP_BIPARTIZATION

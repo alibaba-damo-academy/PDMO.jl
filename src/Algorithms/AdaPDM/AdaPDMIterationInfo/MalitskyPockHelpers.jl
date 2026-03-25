@@ -34,7 +34,9 @@ function updatePrimalSolution!(mbp::MultiblockProblem, info::AdaPDMIterationInfo
     newGamma = 0.0 
      
     # prepare gradient for blocks
-    for block in mbp.blocks[1:end-1]
+    nPrimalBlocks = length(mbp.blocks) - 1
+    for bi in 1:nPrimalBlocks
+        block = mbp.blocks[bi]
         gradientOracle!(info.primalBuffer2[block.id], block.f, info.primalSol[block.id])
     end 
 
@@ -49,7 +51,8 @@ function updatePrimalSolution!(mbp::MultiblockProblem, info::AdaPDMIterationInfo
         copyto!(info.lineSearchDualBuffer, info.dualSol)
         axpby!(-newTheta, info.dualSolPrev, (1.0 + newTheta), info.lineSearchDualBuffer)
 
-        @threads for block in mbp.blocks[1:end-1]
+        @threads for bi in 1:nPrimalBlocks
+            block = mbp.blocks[bi]
             prepareProximalCenterForPrimalUpdate!(info, 
                 block.id, 
                 mbp, 
@@ -70,7 +73,8 @@ function updatePrimalSolution!(mbp::MultiblockProblem, info::AdaPDMIterationInfo
         info.dualBuffer .= 0.0 
         objDiffEstimate = 0.0 
         primalDiffSquare = 0.0 
-        for block in mbp.blocks[1:end-1]
+        for bi in 1:nPrimalBlocks
+            block = mbp.blocks[bi]
             # store Ax^{k+1} in dualBuffer
             mappings[block.id](info.lineSearchPrimalBuffer[block.id], info.dualBuffer, true) 
             # compute f(x^{k+1}) - f(x^k) - <nabla f(x^k), x^{k+1} - x^k>
@@ -99,7 +103,8 @@ function updatePrimalSolution!(mbp::MultiblockProblem, info::AdaPDMIterationInfo
         end         
     end 
 
-    for block in mbp.blocks[1:end-1]
+    for bi in 1:nPrimalBlocks
+        block = mbp.blocks[bi]
         copyto!(info.primalSolPrev[block.id], info.primalSol[block.id])
         copyto!(info.primalSol[block.id], info.lineSearchPrimalBuffer[block.id])
     end 

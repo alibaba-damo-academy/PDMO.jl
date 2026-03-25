@@ -22,14 +22,14 @@ function updateDual!(info::ADMMIterationInfo, admmGraph::ADMMBipartiteGraph, par
         return 
     end 
 
-    @threads for edgeID in collect(keys(info.dualSol))
+    @threads for edgeID in info.edgeIDs
         copyto!(info.dualSolPrev[edgeID], info.dualSol[edgeID])
     end 
 
     rho = info.rhoHistory[end][1] 
     if isa(param.accelerator, AndersonAccelerator) && isa(param.solver, OriginalADMMSubproblemSolver)
         # Anderson acceleration update dual variables via the implicit fixed point variables zeta
-        @threads for edgeID in collect(keys(info.dualSol))
+        @threads for edgeID in info.edgeIDs
             edge = admmGraph.edges[edgeID]
             rightNodeID = param.accelerator.converter.isLeft[edge.nodeID1] ? edge.nodeID2 : edge.nodeID1
             edge.mappings[rightNodeID](info.primalSol[rightNodeID], info.dualSol[edgeID], false)     # info.dualSol <- Bz 
@@ -44,7 +44,7 @@ function updateDual!(info::ADMMIterationInfo, admmGraph::ADMMBipartiteGraph, par
         dualStepsize *= param.solver.dualStepsize 
     end 
 
-    @threads for edgeID in collect(keys(info.dualSol))
+    @threads for edgeID in info.edgeIDs
         axpy!(dualStepsize, info.dualBuffer[edgeID], info.dualSol[edgeID])
     end 
 end
@@ -54,14 +54,14 @@ function updateDualDescent!(info::ADMMIterationInfo, admmGraph::ADMMBipartiteGra
     tau::Float64=1.0, 
     omega::Float64=4.0)
 
-    @threads for edgeID in collect(keys(info.dualSol))
+    @threads for edgeID in info.edgeIDs
         copyto!(info.dualSolPrev[edgeID], info.dualSol[edgeID])
     end 
 
     rho = info.rhoHistory[end][1] 
     dualStepsize = -1.0 * rho / (tau * omega)
     scaledFactor = tau / (1.0 + tau)
-    @threads for edgeID in collect(keys(info.dualSol))
+    @threads for edgeID in info.edgeIDs
         axpy!(dualStepsize, info.dualBuffer[edgeID], info.dualSol[edgeID])
         info.dualSol[edgeID] .*= scaledFactor 
     end 

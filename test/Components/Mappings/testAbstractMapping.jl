@@ -6,6 +6,7 @@ include("../../test_helper.jl")
 
 # Import the adjoint! function from PDMO
 import PDMO: adjoint!
+import PDMO: adjoint
 
 @testset "AbstractMapping Tests" begin
     
@@ -68,6 +69,11 @@ import PDMO: adjoint!
             id_map_one = LinearMappingIdentity(1.0)
             y_one = id_map_one(x_vec)
             @test y_one ≈ x_vec
+
+            # Allocating API should not alias input for arrays.
+            y_alias_check = id_map_one(x_vec)
+            y_alias_check[1] = 999.0
+            @test x_vec[1] == 1.0
         end
         
         @testset "Forward Mapping - In-place" begin
@@ -112,6 +118,13 @@ import PDMO: adjoint!
             ret_adj = [1.0, 1.0, 1.0]
             adjoint!(id_map, y, ret_adj, true)
             @test ret_adj ≈ [5.0, 9.0, 13.0]  # [1,1,1] + [4,8,12]
+
+            # Allocating adjoint should not alias input for arrays.
+            id_map_one = LinearMappingIdentity(1.0)
+            y_src = [2.0, 4.0, 6.0]
+            y_adj = adjoint(id_map_one, y_src)
+            y_adj[1] = -123.0
+            @test y_src[1] == 2.0
         end
         
         @testset "Adjoint Mapping Creation" begin
@@ -205,6 +218,18 @@ import PDMO: adjoint!
             norm_val = operatorNorm2(ext_map)
             @test norm_val ≈ 3.0  # For extraction, norm is |coefficient|
         end
+    end
+
+    @testset "Mapping Composition Adjoint Tests" begin
+        # Regression test: A' * A for extraction mappings must be an operator
+        # on the original space (not another extraction mapping).
+        A = LinearMappingExtraction((4,), 2.0, 2, 3)
+        A_adj_A = adjoint(A, A)
+        @test A_adj_A isa LinearMappingMatrix
+
+        x = [1.0, 2.0, 3.0, 4.0]
+        y = A_adj_A(x)
+        @test y ≈ [0.0, 8.0, 12.0, 0.0]
     end
     
     @testset "LinearMappingMatrix Tests" begin
@@ -317,6 +342,58 @@ import PDMO: adjoint!
             y_zero = mat_map_zero(x_zero)
             @test y_zero ≈ [0.0, 0.0]
         end
+    end
+
+    @testset "LinearMappingIdentityStacking Tests" begin
+        L = LinearMappingIdentityStacking(2.0, 3)
+        x = [1.0, 2.0]
+
+        y = L(x)
+        @test y ≈ [2.0, 4.0, 2.0, 4.0, 2.0, 4.0]
+
+        y_inplace = zeros(6)
+        L(x, y_inplace, false)
+        @test y_inplace ≈ y
+
+        y_add = ones(6)
+        L(x, y_add, true)
+        @test y_add ≈ ones(6) .+ y
+
+        x_adj = adjoint(L, y)
+        @test x_adj ≈ [12.0, 24.0]
+
+        x_adj_inplace = zeros(2)
+        adjoint!(L, y, x_adj_inplace, false)
+        @test x_adj_inplace ≈ x_adj
+
+        @test operatorNorm2(L) ≈ 2.0 * sqrt(3.0)
+    end
+
+    @testset "LinearMappingStacking Tests" begin
+        mappings = AbstractMapping[LinearMappingIdentity(1.0), LinearMappingIdentity(2.0)]
+        L = LinearMappingStacking(mappings, [2, 2])
+        x = [1.0, 2.0]
+
+        y = L(x)
+        @test y ≈ [1.0, 2.0, 2.0, 4.0]
+
+        y_inplace = zeros(4)
+        L(x, y_inplace, false)
+        @test y_inplace ≈ y
+
+        y_add = ones(4)
+        L(x, y_add, true)
+        @test y_add ≈ ones(4) .+ y
+
+        x_adj = adjoint(L, y)
+        @test x_adj ≈ [5.0, 10.0]  # [1,2] + 2*[2,4]
+        @test y ≈ [1.0, 2.0, 2.0, 4.0]  # allocating adjoint must not mutate input
+
+        x_adj_inplace = zeros(2)
+        adjoint!(L, y, x_adj_inplace, false)
+        @test x_adj_inplace ≈ x_adj
+
+        @test operatorNorm2(L) ≈ sqrt(1.0^2 + 2.0^2)
     end
     
     @testset "Mathematical Properties" begin

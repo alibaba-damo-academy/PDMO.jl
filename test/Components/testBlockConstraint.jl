@@ -7,7 +7,8 @@ include("../test_helper.jl")
 # Import the required functions directly from Bipartization
 import PDMO: blockConstraintViolation, addBlockMappingToConstraint!, addBlockMappingsToConstraint!,
                       blockConstraintViolation!, blockConstraintViolationL2Norm, blockConstraintViolationL2Norm!,
-                      blockConstraintViolationLInfNorm, blockConstraintViolationLInfNorm!, checkBlockConstraintValidity
+                      blockConstraintViolationLInfNorm, blockConstraintViolationLInfNorm!, checkBlockConstraintValidity,
+                      checkConstraintsViolation
 
 @testset "BlockConstraint Creation and Constructors" begin
     println("    ├─ Testing BlockConstraint constructors...")
@@ -248,6 +249,28 @@ end
     println("    │  ├─ ✅ L-infinity norm in-place computation")
     
     println("    └─ ✅ Norm computation tests completed")
+end
+
+@testset "BlockConstraint Scalar RHS Norm Helpers" begin
+    println("    ├─ Testing scalar RHS norm helper behavior...")
+
+    bc = BlockConstraint("scalar_norms")
+    bc.rhs = 5.0
+    addBlockMappingToConstraint!(bc, 1, LinearMappingIdentity(2.0))
+    addBlockMappingToConstraint!(bc, 2, LinearMappingIdentity(3.0))
+
+    x_dict = Dict{Union{Int, String}, Union{Float64, AbstractArray{Float64}}}()
+    x_dict[1] = 1.0
+    x_dict[2] = 2.0
+    # residual = 2*1 + 3*2 - 5 = 3
+    @test blockConstraintViolationL2Norm(bc, x_dict) ≈ 3.0
+    @test blockConstraintViolationLInfNorm(bc, x_dict) ≈ 3.0
+
+    presL2, presLinf = checkConstraintsViolation([bc], x_dict)
+    @test presL2 ≈ 3.0
+    @test presLinf ≈ 3.0
+
+    println("    └─ ✅ Scalar RHS norm helpers completed")
 end
 
 @testset "BlockConstraint Validity Checking" begin

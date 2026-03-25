@@ -3,45 +3,32 @@
 
 Wrapper for user-defined smooth functions that have a gradient.
 
-This allows users to define custom smooth functions by providing both the function 
-evaluation and its gradient, enabling integration with gradient-based algorithms.
+This type lets users inject custom smooth functions by providing both value and
+gradient callbacks.
 
 # Arguments
-- `func::Function`: Function evaluation f(x) → Float64
-- `gradientFunc::Function`: Gradient function x → ∇f(x)
+- `func::Function`: Function evaluation callback `f(x) -> Real`.
+- `gradientFunc::Function`: Gradient callback `x -> grad` with output shape
+  compatible with `x`.
 - `convex::Bool=true`: Whether the function is convex
 
 # Properties
 - **Smooth**: Yes, by definition
-- **Convex**: User-specified (default true)
+- **Convex**: Instance-specific (`isConvex(f)` returns the stored `convex` flag)
 - **Proximal**: No, user-defined functions typically don't have proximal oracles
 
-# Mathematical Properties
-- **Function evaluation**: f(x) provided by user
-- **Gradient**: ∇f(x) provided by user
-
-# Simple Quadratic Function
-# f(x) = x₁² + 2x₂² + x₁x₂
-func = x -> x[1]^2 + 2*x[2]^2 + x[1]*x[2]
-gradientFunc = x -> [2*x[1] + x[2], 4*x[2] + x[1]]
-# Non-convex Function
-# f(x) = sin(x₁) + cos(x₂)
-func = x -> sin(x[1]) + cos(x[2])
-gradientFunc = x -> [cos(x[1]), -sin(x[2])]
-# Rosenbrock Function (classic optimization test function)
-# f(x) = (1-x₁)² + 100(x₂-x₁²)²
-func = x -> (1-x[1])^2 + 100*(x[2]-x[1]^2)^2
-gradientFunc = x -> [-2*(1-x[1]) - 400*x[1]*(x[2]-x[1]^2), 200*(x[2]-x[1]^2)]
-# Integration with Bipartization
-```julia
-# In your optimization problems
-block_x = BlockVariable(xID)
 # Requirements
 - `func(x)` must return a Float64 value
-- `gradientFunc(x)` must return a gradient of the same type as x
+- `gradientFunc(x)` must return a gradient with the same shape as `x`
 - Both functions must be consistent with the mathematical definition
-- The gradient must satisfy: ∇f(x) = lim_{h→0} [f(x+h) - f(x)]/h
 - For correctness, consider using automatic differentiation tools to compute gradients
+
+# Example
+```julia
+func = x -> x[1]^2 + 2 * x[2]^2 + x[1] * x[2]
+gradientFunc = x -> [2 * x[1] + x[2], 4 * x[2] + x[1]]
+f = UserDefinedSmoothFunction(func, gradientFunc, true)
+```
 """
 struct UserDefinedSmoothFunction <: AbstractFunction
     func::Function

@@ -12,7 +12,6 @@ All multiblock functions are assumed to be smooth and support:
 # Inheritance from AbstractFunction
 This type inherits from `AbstractFunction` to benefit from the unified type system
 while providing specialized multiblock functionality through its own API.
-```
 """
 abstract type AbstractMultiblockFunction <: AbstractFunction end
 
@@ -138,8 +137,8 @@ f(λx + (1-λ)y) ≤ λf(x) + (1-λ)f(y)
 ```
 
 # Implementation Note
-This trait must be implemented by all concrete subtypes. There is no default implementation
-since convexity depends on the specific function structure.
+The default type-level behavior is `false`. Concrete subtypes should override this
+when convexity is known for that function type.
 """
 isConvex(::Type{<:AbstractMultiblockFunction}) = false
 isConvex(::T) where T <: AbstractMultiblockFunction = isConvex(T)

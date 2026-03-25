@@ -615,5 +615,67 @@ using Random
                 @test all(-1.0 .<= x_final .<= 1.0)  # Box constraints
             end
         end
+
+        @testset "Solver Reuse Reinitialization" begin
+            function build_small_bcd_problem(block_dims::Vector{Int}, seed::Int)
+                Random.seed!(seed)
+                total_dim = sum(block_dims)
+                Q_base = randn(total_dim, total_dim)
+                Q = Q_base' * Q_base + 0.2 * I
+                Q = (Q + Q') / 2
+                q = randn(total_dim)
+                coupling_function = QuadraticMultiblockFunction(Q, q, 0.0, block_dims)
+
+                mbp = MultiblockProblem()
+                mbp.couplingFunction = coupling_function
+                for i in 1:length(block_dims)
+                    dim = block_dims[i]
+                    block = BlockVariable("x$i")
+                    block.f = QuadraticFunction(sparse(Matrix(1.0I, dim, dim)), zeros(dim), 0.0)
+                    block.g = IndicatorBox(-ones(dim), ones(dim))
+                    block.val = 0.1 * randn(dim)
+                    addBlockVariable!(mbp, block)
+                end
+                return mbp
+            end
+
+            # Reuse the same linearized solver across problems with different block counts.
+            linear_solver = BCDProximalLinearSubproblemSolver()
+            param_linear = BCDParam(
+                blockOrderRule = CyclicRule(),
+                solver = linear_solver,
+                dresTolL2 = 1e-3,
+                dresTolLInf = 1e-3,
+                maxIter = 10,
+                timeLimit = 10.0,
+                logInterval = 20,
+                logLevel = 0
+            )
+            result_a = runBCD(build_small_bcd_problem([2, 2], 901), param_linear; tryJuMP=false)
+            @test length(linear_solver.models) == 2
+            @test result_a !== nothing
+            result_b = runBCD(build_small_bcd_problem([2, 2, 2], 902), param_linear; tryJuMP=false)
+            @test length(linear_solver.models) == 3
+            @test result_b !== nothing
+
+            # Reuse the same JuMP-based solver across problems with different block counts.
+            proximal_solver = BCDProximalSubproblemSolver(originalSubproblem=false)
+            param_prox = BCDParam(
+                blockOrderRule = CyclicRule(),
+                solver = proximal_solver,
+                dresTolL2 = 1e-3,
+                dresTolLInf = 1e-3,
+                maxIter = 5,
+                timeLimit = 10.0,
+                logInterval = 20,
+                logLevel = 0
+            )
+            result_c = runBCD(build_small_bcd_problem([2, 2], 903), param_prox; tryJuMP=false)
+            @test length(proximal_solver.models) == 2
+            @test result_c !== nothing
+            result_d = runBCD(build_small_bcd_problem([2, 2, 2], 904), param_prox; tryJuMP=false)
+            @test length(proximal_solver.models) == 3
+            @test result_d !== nothing
+        end
     end
 end

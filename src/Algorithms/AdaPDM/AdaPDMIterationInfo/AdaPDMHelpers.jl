@@ -67,8 +67,9 @@ over all blocks except the last one, which corresponds to the dual variable.
 function updatePrimalSolution!(mbp::MultiblockProblem, 
     info::AdaPDMIterationInfo, 
     param::AdaPDMParam)
-    @threads for block in mbp.blocks[1:end-1]
-        updatePrimalSolution!(block, mbp, info)
+    nPrimalBlocks = length(mbp.blocks) - 1
+    @threads for bi in 1:nPrimalBlocks
+        updatePrimalSolution!(mbp.blocks[bi], mbp, info)
     end 
 end 
 

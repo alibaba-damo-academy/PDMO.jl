@@ -18,7 +18,9 @@ Compute the operator norm estimate for the given multiblock problem.
 """
 function computeNormEstimate(mbp::MultiblockProblem)
     operatorNormEstimate = 0.0 
-    for block in mbp.blocks[1:end-1]
+    nPrimalBlocks = length(mbp.blocks) - 1
+    for bi in 1:nPrimalBlocks
+        block = mbp.blocks[bi]
         mapping = mbp.constraints[1].mappings[block.id]
         operatorNormEstimate += operatorNorm2(mapping)^2
     end 

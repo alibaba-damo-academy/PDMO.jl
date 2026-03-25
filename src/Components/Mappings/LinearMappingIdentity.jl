@@ -60,14 +60,19 @@ Apply the scaled identity mapping to input `x` and return the result as a new va
 - `x::NumericVariable`: Input array or number to which the mapping is applied.
 
 # Returns
-- The input `x` scaled by the coefficient `coe`. If `coe` is 1.0, returns `x` directly.
+- The input `x` scaled by the coefficient `coe`.
+- For array inputs, returns a fresh array (non-aliasing).
+- For scalar inputs, returns the scalar value directly.
 
 # Implementation Details
-For efficiency, when `coe` is 1.0, the function returns the input directly without allocating
-a new array.
+For `coe == 1.0`, array inputs are copied to preserve allocating-API semantics
+(callers can safely mutate the returned value without mutating the input).
 """
 function (L::LinearMappingIdentity)(x::NumericVariable)
-    return L.coe == 1.0 ? x : L.coe * x
+    if isa(x, Number)
+        return L.coe == 1.0 ? x : L.coe * x
+    end
+    return L.coe == 1.0 ? copy(x) : L.coe * x
 end
 
 """
@@ -97,11 +102,13 @@ Apply the adjoint of the scaled identity mapping to input `y` and return the res
 - `y::NumericVariable`: Input array or number to which the adjoint mapping is applied.
 
 # Returns
-- The input `y` scaled by the coefficient `coe`. If `coe` is 1.0, returns `y` directly.
+- The input `y` scaled by the coefficient `coe`.
+- For array inputs, returns a fresh array (non-aliasing).
+- For scalar inputs, returns the scalar value directly.
 
 # Implementation Details
 For a scaled identity mapping, the adjoint operation is identical to the forward operation,
-so this function simply delegates to the forward operator.
+and follows the same non-aliasing behavior for array outputs.
 """
 function adjoint(L::LinearMappingIdentity, y::NumericVariable)
     return L(y)

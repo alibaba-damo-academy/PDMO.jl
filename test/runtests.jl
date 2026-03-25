@@ -86,40 +86,38 @@ println("="^80)
     @info "🔧 ALGORITHMS TESTS" description="Testing optimization algorithms: BCD, ADMM, AdaPDM"
     algorithms_testset = @testset verbose=true "Algorithms Tests" begin
         
+        @info "Testing ADMM Algorithm..."
+        @testset "ADMM Tests" begin
+            include("Algorithms/ADMM/testBipartiteADMM.jl")
+        end
+
         @info "Testing BCD Algorithm..."
         @testset "BCD Tests" begin
             include("Algorithms/BCD/testBCDTwoBlockQP.jl")
         end
         
-        # Future algorithm tests can be added here:
-        # @info "Testing ADMM Algorithm..."
-        # @testset "ADMM Tests" begin
-        #     include("Algorithms/ADMM/test_bipartite_admm.jl")
-        # end
-        # 
-        # @info "Testing AdaPDM Algorithm..."
-        # @testset "AdaPDM Tests" begin
-        #     include("Algorithms/AdaPDM/test_adapdm.jl")
-        # end
+        @info "Testing AdaPDM Algorithm..."
+        @testset "AdaPDM Tests" begin
+            include("Algorithms/AdaPDM/testAdaPDM.jl")
+        end
     end
     
     # Count and report algorithms tests
     test_counter.algorithm_tests = count_tests_in_testset(algorithms_testset)
     @info "✅ ALGORITHMS TESTS COMPLETED" tests_executed=test_counter.algorithm_tests
     
-    # SKIPPED SECTIONS REPORTING
-    @info "⏸️ SKIPPED TEST SECTIONS" description="The following test sections are currently disabled"
-    println("  Utilities Tests (I/O utilities) - 0 tests")
-    println("  └─ To enable these tests, uncomment the sections in runtests.jl")
+    # UTILITIES TESTS
+    @info "🧰 UTILITIES TESTS" description="Testing utility modules: DEC parser and I/O helpers"
+    utilities_testset = @testset verbose=true "Utilities Tests" begin
+        @info "Testing DEC parser utility..."
+        @testset "DEC Parser Tests" begin
+            include("Util/testDEC.jl")
+        end
+    end
     
-    test_counter.utility_tests = 0    # Currently skipped
-    
-    # @testset verbose=true "Utilities Tests" begin
-    #     @info "Testing I/O utilities..."
-    #     @testset "I/O Tests" begin
-    #         include("Util/test_io.jl")
-    #     end
-    # end
+    # Count and report utilities tests
+    test_counter.utility_tests = count_tests_in_testset(utilities_testset)
+    @info "✅ UTILITIES TESTS COMPLETED" tests_executed=test_counter.utility_tests
 end
 
 # Print final comprehensive summary

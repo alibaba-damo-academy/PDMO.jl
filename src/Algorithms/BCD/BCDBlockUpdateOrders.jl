@@ -105,8 +105,9 @@ function updateBlockOrder!(rule::CyclicRule, mbp::MultiblockProblem, info::BCDIt
         throw(ArgumentError("MultiblockProblem must have at least one block"))
     end
     
-    # Initialize block order on first call
-    if isempty(rule.blocksToUpdate)
+    # Initialize (or resize) block order if needed.
+    if length(rule.blocksToUpdate) != numberBlocks
+        empty!(rule.blocksToUpdate)
         append!(rule.blocksToUpdate, 1:numberBlocks)
     end 
 end

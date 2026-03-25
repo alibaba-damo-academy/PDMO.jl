@@ -317,6 +317,17 @@ include("../../test_helper.jl")
         
         grad_single = gradientOracle(f_single, x_single)
         @test grad_single[1] ≈ [2.0 * 2.0 * 3.0 + 1.0]  # [12 + 1] = [13]
+
+        # Scalar block should be rejected (this implementation expects array blocks)
+        x_scalar_block = NumericVariable[1.0, [2.0]]
+        @test_throws AssertionError f(x_scalar_block)
+
+        # Concatenated gradient API dimension checks
+        grad_bad = zeros(1)
+        x_good = [1.0, 2.0]
+        @test_throws AssertionError gradientOracle!(grad_bad, f, x_good)
+        @test_throws AssertionError gradientOracle!(0.0, f, x_good)
+        @test_throws AssertionError gradientOracle!(zeros(2), f, 1.0)
     end
     
     @testset "Performance and Type Stability Tests" begin

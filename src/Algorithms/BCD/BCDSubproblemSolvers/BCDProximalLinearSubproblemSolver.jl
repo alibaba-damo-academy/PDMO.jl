@@ -50,46 +50,10 @@ end
 """
     BCDProximalLinearSubproblemSolver <: AbstractBCDSubproblemSolver
 
-Proximal gradient-based BCD subproblem solver using linearized coupling functions.
-
-This solver implements a proximal gradient approach for BCD subproblems by linearizing
-the coupling function around the current point and solving the resulting proximal 
-mapping problem. This approach is particularly efficient for problems where the
-coupling function is smooth but the proximal operators of block functions are
-easy to compute.
+A proximal-gradient BCD subproblem solver using linearized coupling terms.
 
 # Fields
 - `models::Vector{BCDProximalLinearModel}`: Proximal linear models for each block
-
-# Mathematical Formulation
-At iteration k, for block i, solves the proximal mapping:
-```
-x_i^{k+1} = prox_{γ_i g_i}(y_i^k - γ_i (∇_i F(x^k) + ∇f_i(x_i^k)))
-```
-
-where:
-- `y_i^k` is an extrapolation point (with momentum if enabled)
-- `γ_i = 1/L_i` is the step size based on estimated Lipschitz constant `L_i`
-- `∇_i F(x^k)` is the partial gradient of coupling function w.r.t. block i
-- `∇f_i(x_i^k)` is the gradient of the smooth block function
-- `prox_{γ_i g_i}` is the proximal operator of the proximable block function
-
-# Algorithm Steps
-1. **Gradient Computation**: Compute gradients of coupling and block functions
-2. **Extrapolation**: Apply momentum-based extrapolation (if enabled)
-3. **Proximal Center**: Compute proximal center using gradient descent step
-4. **Proximal Mapping**: Apply proximal operator of block constraint/regularizer
-
-# Performance Characteristics
-- **Efficiency**: Avoids solving optimization subproblems, uses closed-form proximal operators
-- **Scalability**: Particularly effective for large-scale problems
-- **Convergence**: Suitable for smooth coupling functions with Lipschitz gradients
-- **Memory**: Lower memory footprint compared to JuMP-based solvers
-
-# Automatic Parameter Selection
-- Proximal coefficients `L_i` are automatically estimated from Lipschitz constants
-- Extrapolation weights can be adapted (currently initialized to 0)
-
 """
 mutable struct BCDProximalLinearSubproblemSolver <: AbstractBCDSubproblemSolver
     models::Vector{BCDProximalLinearModel}
@@ -105,6 +69,7 @@ function initialize!(solver::BCDProximalLinearSubproblemSolver,
     info::BCDIterationInfo)
     
     numberBlocks = length(mbp.blocks)
+    empty!(solver.models)
     
     # Create model for each block
     for k in 1:numberBlocks 

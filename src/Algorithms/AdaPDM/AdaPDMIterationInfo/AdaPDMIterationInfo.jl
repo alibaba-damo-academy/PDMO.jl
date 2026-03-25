@@ -150,7 +150,9 @@ function computeAdaPDMDualResiduals!(info::AdaPDMIterationInfo, mbp::MultiblockP
     end 
 
     mappings = mbp.constraints[1].mappings 
-    for block in mbp.blocks[1:end-1]
+    nPrimalBlocks = length(mbp.blocks) - 1
+    for bi in 1:nPrimalBlocks
+        block = mbp.blocks[bi]
         gradientOracle!(info.primalBuffer1[block.id], block.f, info.primalSol[block.id])
         gradientOracle!(info.primalBuffer2[block.id], block.f, info.primalSolPrev[block.id])
         axpy!(-1.0, info.primalBuffer2[block.id], info.primalBuffer1[block.id])
@@ -161,9 +163,9 @@ function computeAdaPDMDualResiduals!(info::AdaPDMIterationInfo, mbp::MultiblockP
             adjoint!(mappings[block.id], info.lineSearchDualBuffer, info.primalBuffer1[block.id], true)
         end 
 
-        blockDresL2 = norm(info.primalBuffer1[block.id], 2)
+        blockDresL2Sq = dot(info.primalBuffer1[block.id], info.primalBuffer1[block.id])
         blockDresLInf = norm(info.primalBuffer1[block.id], Inf)
-        dresL2 += blockDresL2^2
+        dresL2 += blockDresL2Sq
         dresLInf = max(dresLInf, blockDresLInf)
     end 
     dresL2 = sqrt(dresL2)
@@ -196,7 +198,9 @@ function computeAdaPDMPrimalResiduals!(info::AdaPDMIterationInfo, mbp::Multibloc
     info.dualBuffer .= 0.0 
     addToBuffer = true 
     mappings = mbp.constraints[1].mappings 
-    for block in mbp.blocks[1:end-1]
+    nPrimalBlocks = length(mbp.blocks) - 1
+    for bi in 1:nPrimalBlocks
+        block = mbp.blocks[bi]
         mappings[block.id](info.primalSol[block.id], info.dualBuffer, addToBuffer)
     end 
 
@@ -214,7 +218,7 @@ function computeAdaPDMPrimalResiduals!(info::AdaPDMIterationInfo, mbp::Multibloc
     axpy!(1.0 / info.dualStepSize, info.dualSolPrev, info.dualBuffer)
     axpy!(-1.0 / info.dualStepSize, info.dualSol, info.dualBuffer)
 
-    presL2 = norm(info.dualBuffer, 2)
+    presL2 = sqrt(dot(info.dualBuffer, info.dualBuffer))
     presLInf = norm(info.dualBuffer, Inf)
     push!(info.presL2, presL2)
     push!(info.presLInf, presLInf)
@@ -265,7 +269,9 @@ function computePDMResidualsAndObjective!(info::AdaPDMIterationInfo, mbp::Multib
 
         # update bufferAx and bufferAxPrev 
         mappings = mbp.constraints[1].mappings 
-        for block in mbp.blocks[1:end-1]
+        nPrimalBlocks = length(mbp.blocks) - 1
+        for bi in 1:nPrimalBlocks
+            block = mbp.blocks[bi]
             mappings[block.id](info.primalSol[block.id], info.bufferAx, true)
             mappings[block.id](info.primalSolPrev[block.id], info.bufferAxPrev, true)
         end 
@@ -328,8 +334,10 @@ function AdaPDMIterationInfo(mbp::MultiblockProblem, param::AbstractAdaPDMParam)
     info.lineSearchDualBuffer = zero(mbp.constraints[1].rhs)
     
     constraint = mbp.constraints[1]
+    nPrimalBlocks = length(mbp.blocks) - 1
     # initialize primal solution and primal buffers 
-    for block in mbp.blocks[1:end-1]
+    for bi in 1:nPrimalBlocks
+        block = mbp.blocks[bi]
         # initialize primal buffers 
         info.primalBuffer1[block.id] = similar(block.val)
         info.primalBuffer2[block.id] = similar(block.val)
@@ -337,12 +345,14 @@ function AdaPDMIterationInfo(mbp::MultiblockProblem, param::AbstractAdaPDMParam)
             info.lineSearchPrimalBuffer[block.id] = similar(block.val)
         end 
         # initialize x^{-1}
-        info.primalSolPrev[block.id] = deepcopy(block.val)
+        info.primalSolPrev[block.id] = copy(block.val)
         # initialize x^0
         ## the poximal center is x^{-1} - gamma * nabla f(x^{-1}) - gamma A'y^0
         copyto!(info.primalBuffer1[block.id], info.primalSolPrev[block.id])
-        axpy!(-info.primalStepSize, gradientOracle(block.f, info.primalSolPrev[block.id]), info.primalBuffer1[block.id])
-        axpy!(-info.primalStepSize, adjoint(constraint.mappings[block.id], info.dualSol), info.primalBuffer1[block.id])
+        gradientOracle!(info.primalBuffer2[block.id], block.f, info.primalSolPrev[block.id])
+        axpy!(-info.primalStepSize, info.primalBuffer2[block.id], info.primalBuffer1[block.id])
+        adjoint!(constraint.mappings[block.id], info.dualSol, info.primalBuffer2[block.id], false)
+        axpy!(-info.primalStepSize, info.primalBuffer2[block.id], info.primalBuffer1[block.id])
         
         info.primalSol[block.id] = similar(block.val)
         proximalOracle!(info.primalSol[block.id], block.g, info.primalBuffer1[block.id], info.primalStepSize)
@@ -353,7 +363,8 @@ function AdaPDMIterationInfo(mbp::MultiblockProblem, param::AbstractAdaPDMParam)
     computePDMResidualsAndObjective!(info, mbp, param)
     
     # prepare bufferAxPrev 
-    for block in mbp.blocks[1:end-1]
+    for bi in 1:nPrimalBlocks
+        block = mbp.blocks[bi]
         # bufferAx has been updated in computeAdaPDMObjective!
         constraint.mappings[block.id](info.primalSolPrev[block.id], info.bufferAxPrev, true)
     end 
