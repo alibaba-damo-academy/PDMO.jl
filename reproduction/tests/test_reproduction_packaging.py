@@ -43,8 +43,8 @@ class ReproductionPackagingTests(unittest.TestCase):
 
     def test_tested_julia_lock_snapshots_are_portable(self):
         snapshots = {
-            "PDMO.Manifest.toml": "15618b1809ad93cad39f88b8d067a202176558aebed7eb8488c91e07f730d7b7",
-            "advanced.Manifest.toml": "48fc67c3f75f71b8ad7256d4fb5c68ee4bfb0414d2571f965696df9084e6a29f",
+            "PDMO.Manifest.toml": "9a8efa225a41c900b4c1d592c3e73987d4db1375068c1c5a72cdeb321d324b67",
+            "advanced.Manifest.toml": "be70f2e80a271886ff027e6817bba6b92f1491618ac84f0478bc33e3bd09f79d",
         }
         for filename, expected_sha256 in snapshots.items():
             path = REPRODUCTION_ROOT / "julia_manifests" / filename
@@ -53,6 +53,17 @@ class ReproductionPackagingTests(unittest.TestCase):
             self.assertEqual(hashlib.sha256(payload).hexdigest(), expected_sha256)
             self.assertIn('julia_version = "1.11.5"', text)
             self.assertIsNone(re.search(r'^path = "/', text, flags=re.MULTILINE))
+            self.assertRegex(
+                text,
+                r"(?ms)^\[\[deps\.HiGHS\]\].*?^version = \"1\.18\.0\"$",
+            )
+            self.assertRegex(
+                text,
+                (
+                    r"(?ms)^\[\[deps\.HiGHS_jll\]\].*?"
+                    r"^version = \"1\.11\.0\+1\"$"
+                ),
+            )
 
     def test_bundled_problem_inputs_have_pinned_hashes(self):
         expected = {

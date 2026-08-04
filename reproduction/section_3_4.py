@@ -171,6 +171,10 @@ REFERENCE_FIGURES = {
     ("doubly", 200, "gnn"): (0.730231, 0.810293),
 }
 
+# The tested locks pin the exact archived HiGHS wrapper and core, so every
+# paper method has an exact smoke fingerprint.
+SMOKE_ENFORCED_METHODS = PAPER_METHODS
+
 SMOKE_REFERENCE = {
     "basic": {
         "iterations": 4350.0,
@@ -297,11 +301,65 @@ def first_match(text: str, pattern: str, *, flags: int = 0) -> str | None:
     return match.group(1).strip() if match else None
 
 
+def last_match(text: str, pattern: str, *, flags: int = 0) -> str | None:
+    matches = list(re.finditer(pattern, text, flags))
+    return matches[-1].group(1).strip() if matches else None
+
+
 def canonical_gap(value: float) -> tuple[str, float] | None:
     for gap in PAPER_GAPS:
         if abs(value - gap) <= 1e-9:
             return f"milp_{gap}", gap
     return None
+
+
+def parse_mip_report(report: str) -> dict[str, object]:
+    return {
+        "mip_status": first_match(
+            report, r"^\s*Status\s+([^\n]+?)\s*$", flags=re.MULTILINE
+        ) or None,
+        "mip_achieved_gap_percent": optional_float(
+            first_match(
+                report,
+                rf"^\s*Gap\s+({NUMBER_PATTERN})%\s*\(tolerance:",
+                flags=re.MULTILINE,
+            )
+        ),
+        "mip_solver_time_seconds": optional_float(
+            first_match(
+                report,
+                rf"^\s*Timing\s+({NUMBER_PATTERN})(?:\s+\(total\))?\s*$",
+                flags=re.MULTILINE,
+            )
+        ),
+    }
+
+
+def parse_mip_reports(text: str) -> dict[str, dict[str, object]]:
+    starts = list(re.finditer(r"^Solving report\s*$", text, re.MULTILINE))
+    reports: dict[str, dict[str, object]] = {}
+    ambiguous: set[str] = set()
+    for index, start in enumerate(starts):
+        end = starts[index + 1].start() if index + 1 < len(starts) else len(text)
+        report = text[start.start() : end]
+        tolerance_percent = optional_float(
+            first_match(
+                report,
+                rf"^\s*Gap\s+{NUMBER_PATTERN}%\s*\(tolerance:\s*({NUMBER_PATTERN})%\)",
+                flags=re.MULTILINE,
+            )
+        )
+        canonical = canonical_gap(tolerance_percent / 100.0) if tolerance_percent is not None else None
+        values = parse_mip_report(report)
+        if canonical is None or any(value is None for value in values.values()):
+            continue
+        method, _ = canonical
+        if method in reports:
+            ambiguous.add(method)
+            reports.pop(method)
+        elif method not in ambiguous:
+            reports[method] = values
+    return reports
 
 
 def canonical_method(label: str) -> tuple[str, float | None] | None:
@@ -411,48 +469,30 @@ def parse_summary_table(text: str) -> dict[str, dict[str, float]]:
 
 
 def parse_graph_block(block: str) -> dict[str, object]:
-    marker = block.rfind("Summary of ADMM Bipartitie Graph")
-    if marker < 0:
-        node_matches = list(re.finditer(r"Number of nodes\s*=\s*(\d+)", block))
-        edge_matches = list(re.finditer(r"Number of edges\s*=\s*(\d+)", block))
-        partition_matches = list(
-            re.finditer(
-                r"Par(?:t)?ition size[^=]*=\s*\((\d+)\s*,\s*(\d+)\)",
-                block,
-            )
+    node_matches = list(re.finditer(r"Number of nodes\s*=\s*(\d+)", block))
+    edge_matches = list(re.finditer(r"Number of edges\s*=\s*(\d+)", block))
+    partition_matches = list(
+        re.finditer(
+            r"Par(?:t)?ition size[^=]*=\s*\((\d+)\s*,\s*(\d+)\)",
+            block,
         )
-        if not node_matches and not edge_matches and not partition_matches:
-            return {}
-        # Julia's logger writes to stderr while the detailed summaries use
-        # stdout. In a merged fresh log all logger headers may precede the
-        # method banners, so the final graph values are the last occurrences
-        # in the method's stdout block.
+    )
+    if not node_matches and not edge_matches and not partition_matches:
+        return {}
+
+    partition = partition_matches[-1] if partition_matches else None
+    if partition is None:
         nodes = int(node_matches[-1].group(1)) if node_matches else None
         edges = int(edge_matches[-1].group(1)) if edge_matches else None
-        partition = partition_matches[-1] if partition_matches else None
     else:
-        graph_text = block[marker:]
-        nodes = optional_int(first_match(graph_text, r"Number of nodes\s*=\s*(\d+)"))
-        edges = optional_int(first_match(graph_text, r"Number of edges\s*=\s*(\d+)"))
-        partition = re.search(
-            r"Par(?:t)?ition size[^=]*=\s*\((\d+)\s*,\s*(\d+)\)",
-            graph_text,
-        )
-        # One archived merged stdout/stderr stream prints the graph values just
-        # before the summary header. Backfill from the immediately preceding
-        # bipartization block without disturbing the normal post-header format.
-        if nodes is None or edges is None or partition is None:
-            fallback_start = block.rfind("ADMMBipartiteGraph:", 0, marker)
-            fallback = block[fallback_start:marker] if fallback_start >= 0 else ""
-            if nodes is None:
-                nodes = optional_int(first_match(fallback, r"Number of nodes\s*=\s*(\d+)"))
-            if edges is None:
-                edges = optional_int(first_match(fallback, r"Number of edges\s*=\s*(\d+)"))
-            if partition is None:
-                partition = re.search(
-                    r"Par(?:t)?ition size[^=]*=\s*\((\d+)\s*,\s*(\d+)\)",
-                    fallback,
-                )
+        nodes_before = [
+            match for match in node_matches if match.start() < partition.start()
+        ]
+        edges_after = [
+            match for match in edge_matches if match.start() > partition.end()
+        ]
+        nodes = int(nodes_before[-1].group(1)) if nodes_before else None
+        edges = int(edges_after[0].group(1)) if edges_after else None
 
     left = int(partition.group(1)) if partition else None
     right = int(partition.group(2)) if partition else None
@@ -470,10 +510,15 @@ def parse_graph_block(block: str) -> dict[str, object]:
 
 def parse_method_block(block: str, method: str, gap: float | None) -> dict[str, object]:
     partition_time = optional_float(
-        first_match(block, rf"ADMMBipartiteGraph:.*?took\s+({NUMBER_PATTERN})\s+seconds")
+        last_match(block, rf"ADMMBipartiteGraph:.*?took\s+({NUMBER_PATTERN})\s+seconds")
     )
     if partition_time is None and "skip bipartization" in block.lower():
         partition_time = 0.0
+    status_pattern = r"Solver Status\s*=\s*([^\s]+)"
+    status_matches = list(re.finditer(status_pattern, block))
+    admm_summary = (
+        block[status_matches[-1].start() :] if status_matches else block
+    )
 
     record: dict[str, object] = {
         "method": method,
@@ -482,39 +527,33 @@ def parse_method_block(block: str, method: str, gap: float | None) -> dict[str, 
         "graph_partition_time_seconds": partition_time,
         "partition_time_seconds": partition_time,
         "admm_initialization_seconds": optional_float(
-            first_match(block, rf"ADMM: initialization took\s+({NUMBER_PATTERN})\s+seconds")
+            last_match(block, rf"ADMM: initialization took\s+({NUMBER_PATTERN})\s+seconds")
         ),
-        "admm_status": first_match(block, r"Solver Status\s*=\s*([^\s]+)"),
-        "iterations": optional_int(first_match(block, r"Stop\. Iter\s*=\s*(\d+)")),
+        "admm_status": first_match(admm_summary, status_pattern),
+        "iterations": optional_int(first_match(admm_summary, r"Stop\. Iter\s*=\s*(\d+)")),
         "admm_time_seconds": optional_float(
-            first_match(block, rf"Total Time\s*=\s*({NUMBER_PATTERN})")
+            first_match(admm_summary, rf"Total Time\s*=\s*({NUMBER_PATTERN})")
         ),
-        "objective": optional_float(first_match(block, rf"Objective\s*=\s*({NUMBER_PATTERN})")),
+        "objective": optional_float(first_match(admm_summary, rf"Objective\s*=\s*({NUMBER_PATTERN})")),
         "primal_residual_l2": optional_float(
-            first_match(block, rf"Pres \(L2\)\s*=\s*({NUMBER_PATTERN})")
+            first_match(admm_summary, rf"Pres \(L2\)\s*=\s*({NUMBER_PATTERN})")
         ),
         "primal_residual_linf": optional_float(
-            first_match(block, rf"Pres \(LInf\)\s*=\s*({NUMBER_PATTERN})")
+            first_match(admm_summary, rf"Pres \(LInf\)\s*=\s*({NUMBER_PATTERN})")
         ),
         "dual_residual_l2": optional_float(
-            first_match(block, rf"Dres \(L2\)\s*=\s*({NUMBER_PATTERN})")
+            first_match(admm_summary, rf"Dres \(L2\)\s*=\s*({NUMBER_PATTERN})")
         ),
         "dual_residual_linf": optional_float(
-            first_match(block, rf"Dres \(LInf\)\s*=\s*({NUMBER_PATTERN})")
+            first_match(admm_summary, rf"Dres \(LInf\)\s*=\s*({NUMBER_PATTERN})")
         ),
     }
     record.update(parse_graph_block(block))
 
     if method.startswith("milp_"):
         report_marker = block.rfind("Solving report")
-        report = block[report_marker:] if report_marker >= 0 else block
-        record["mip_status"] = first_match(report, r"Status\s+([^\n]+)")
-        record["mip_achieved_gap_percent"] = optional_float(
-            first_match(report, rf"Gap\s+({NUMBER_PATTERN})%\s*\(tolerance")
-        )
-        record["mip_solver_time_seconds"] = optional_float(
-            first_match(report, rf"Timing\s+({NUMBER_PATTERN})\s+\(total\)")
-        )
+        report = block[report_marker:] if report_marker >= 0 else ""
+        record.update(parse_mip_report(report))
     else:
         record["mip_status"] = None
         record["mip_achieved_gap_percent"] = None
@@ -540,7 +579,14 @@ def parse_log(path: Path) -> list[dict[str, object]]:
         block = text[match.end() : block_end]
         parsed = parse_method_block(block, method, gap)
         parsed.update(metadata)
+        parsed["threads"] = optional_int(
+            first_match(block, r"Run Bipartite ADMM with threads\s*=\s*(\d+)")
+        )
         records[method] = parsed
+
+    for method, report_values in parse_mip_reports(text).items():
+        if method in records:
+            records[method].update(report_values)
 
     # The final table is the most precise archived representation of BipT and
     # is the source used by the original plotting script.  Use it to backfill
@@ -564,12 +610,23 @@ def parse_log(path: Path) -> list[dict[str, object]]:
         record = records.get(method)
         if record is None:
             continue
-        graph_complete = all(record.get(field) is not None for field in ("graph_nodes", "graph_edges"))
+        graph_complete = all(
+            record.get(field) is not None for field in ("graph_nodes", "graph_edges")
+        )
         performance_complete = all(
             record.get(field) is not None
             for field in ("partition_time_seconds", "iterations", "admm_time_seconds")
         )
-        record["complete"] = bool(graph_complete and performance_complete and record.get("admm_status"))
+        mip_complete = not method.startswith("milp_") or all(
+            record.get(field) is not None
+            for field in ("mip_status", "mip_achieved_gap_percent", "mip_solver_time_seconds")
+        )
+        record["complete"] = bool(
+            graph_complete
+            and performance_complete
+            and mip_complete
+            and record.get("admm_status")
+        )
         record["fidelity_warning"] = OBJECTIVE_FIDELITY_WARNING
         output.append(record)
     return output

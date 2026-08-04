@@ -1,8 +1,11 @@
 import subprocess
+import sys
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from reproduction.section_3_3 import _check_python_dependencies
+from reproduction.section_3_3 import _check_python_dependencies, _resolve_python
 
 
 class GNNPythonVersionTests(unittest.TestCase):
@@ -35,4 +38,18 @@ class GNNPythonVersionTests(unittest.TestCase):
 
         self.assertEqual(run_mock.call_count, 2)
 
+
+    def test_resolve_python_preserves_virtualenv_symlink(self):
+        with TemporaryDirectory() as directory:
+            executable = Path(directory) / "python"
+            executable.symlink_to(Path(sys.executable))
+
+            selected = Path(_resolve_python(executable))
+
+            self.assertEqual(selected, executable.absolute())
+            self.assertNotEqual(selected, executable.resolve())
+
+
+if __name__ == "__main__":
+    unittest.main()
 

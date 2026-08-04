@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 import hashlib
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -55,6 +57,94 @@ def _log_text(
             f"{admm_times[index]} | {100.0 + index} |"
         )
     return "\n".join(lines) + "\n"
+
+
+def _raw_comparison_rows() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    fresh_rows: list[dict[str, object]] = []
+    archive_rows: list[dict[str, object]] = []
+    counter = 100
+    for spec in section_3_3.FRESH_FULL_SPECS:
+        for method in section_3_3.METHODS:
+            key = (*spec.key, method)
+            archive_censored = key in section_3_3.ARCHIVE_TIME_CENSORED_KEYS
+            archived = {
+                "figure": spec.figure,
+                "case": spec.case,
+                "partition_number": spec.partition_number,
+                "method": method,
+                "admm_solver": spec.solver,
+                "initial_rho": spec.rho,
+                "tolerance": section_3_3.TOLERANCE,
+                "max_iterations": section_3_3.MAX_ITERATIONS,
+                "time_limit_seconds": section_3_3.TIME_LIMIT_SECONDS,
+                "log_interval": section_3_3.LOG_INTERVAL,
+                "r_value": section_3_3.R_VALUE,
+                "seed": section_3_3.SEED,
+                "threads": 16,
+                "iterations": counter,
+                "termination_status": (
+                    "ADMM_TERMINATION_TIME_LIMIT"
+                    if archive_censored
+                    else "ADMM_TERMINATION_OPTIMAL"
+                ),
+                "partition_time_seconds": float(counter) / 10.0,
+                "admm_time_seconds": float(counter),
+            }
+            fresh = dict(archived)
+            fresh["partition_time_seconds"] = float(archived["partition_time_seconds"]) + 7.0
+            fresh["admm_time_seconds"] = float(archived["admm_time_seconds"]) + 11.0
+            if archive_censored:
+                # These differences must be reported but not gated.
+                fresh["iterations"] = counter + 999
+                fresh["termination_status"] = "ADMM_TERMINATION_OPTIMAL"
+            archive_rows.append(archived)
+            fresh_rows.append(fresh)
+            counter += 1
+    return fresh_rows, archive_rows
+
+
+def _semantic_archive_rows() -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    counter = 1_000
+    for spec in section_3_3.ARCHIVED_SPECS:
+        assert spec.archive_job_id is not None
+        for method in section_3_3.METHODS:
+            time_censored = (
+                spec.figure,
+                spec.case,
+                spec.partition_number,
+                method,
+            ) in section_3_3.ARCHIVE_TIME_CENSORED_KEYS
+            rows.append(
+                {
+                    "archive_folder": spec.archive_folder,
+                    "archive_job_id": spec.archive_job_id,
+                    "figure": spec.figure,
+                    "case": spec.case,
+                    "partition_number": spec.partition_number,
+                    "method": method,
+                    "admm_solver": spec.solver,
+                    "initial_rho": spec.rho,
+                    "tolerance": section_3_3.TOLERANCE,
+                    "max_iterations": section_3_3.MAX_ITERATIONS,
+                    "time_limit_seconds": section_3_3.TIME_LIMIT_SECONDS,
+                    "log_interval": section_3_3.LOG_INTERVAL,
+                    "r_value": section_3_3.R_VALUE,
+                    "seed": section_3_3.SEED,
+                    "threads": 16,
+                    "true_dc_objective": section_3_3.OBJECTIVE_FINGERPRINTS[spec.case],
+                    "iterations": counter,
+                    "termination_status": (
+                        "ADMM_TERMINATION_TIME_LIMIT"
+                        if time_censored
+                        else "ADMM_TERMINATION_OPTIMAL"
+                    ),
+                    "partition_time_seconds": counter / 100.0,
+                    "admm_time_seconds": counter / 10.0,
+                }
+            )
+            counter += 1
+    return rows
 
 
 class Section33ParserTests(unittest.TestCase):
@@ -188,6 +278,20 @@ class Section33AggregationTests(unittest.TestCase):
         self.assertEqual(validation["status"], "failed")
         self.assertTrue(any("invalid seed" in error for error in validation["errors"]))
 
+    def test_wrong_thread_count_is_rejected(self) -> None:
+        _, rows = self._parse(_log_text())
+        rows[0]["threads"] = 8
+
+        validation = section_3_3._validate_rows(
+            rows,
+            section_3_3.SMOKE_SPECS,
+            require_archived_statuses=False,
+            check_objectives=True,
+        )
+
+        self.assertEqual(validation["status"], "failed")
+        self.assertTrue(any("invalid threads" in error for error in validation["errors"]))
+
     def test_job_command_passes_seed_126_explicitly(self) -> None:
         args = argparse.Namespace(julia="julia", threads=16)
         jobs = section_3_3._jobs_for_specs(
@@ -245,7 +349,7 @@ class Section33AggregationTests(unittest.TestCase):
 
 
 class Section33Figure14ProfileTests(unittest.TestCase):
-    def test_archived_and_fresh_specs_are_explicitly_distinct(self) -> None:
+    def test_full_uses_published_profile_but_remains_fresh(self) -> None:
         archived = [spec for spec in section_3_3.ARCHIVED_SPECS if spec.figure == 14]
         fresh = [spec for spec in section_3_3.FRESH_FULL_SPECS if spec.figure == 14]
 
@@ -256,36 +360,244 @@ class Section33Figure14ProfileTests(unittest.TestCase):
             [spec.archive_job_id for spec in archived],
             [str(value) for value in range(51523865, 51523871)],
         )
-        self.assertTrue(all(spec.rho == 1000.0 for spec in fresh))
+        self.assertTrue(all(spec.rho == 2000.0 for spec in fresh))
         self.assertTrue(all(spec.archive_job_id is None for spec in fresh))
+        self.assertTrue(
+            all(spec.archive_job_id is None for spec in section_3_3.FRESH_FULL_SPECS)
+        )
         self.assertEqual(
             section_3_3._experiment_profile(section_3_3.ARCHIVED_SPECS)["classification"],
             "historical_reported_archive",
         )
         self.assertEqual(
             section_3_3._experiment_profile(section_3_3.FRESH_FULL_SPECS)["classification"],
-            "manuscript_literal_fresh",
+            "fresh_published_profile",
+        )
+        self.assertTrue(
+            all(
+                spec.rho == 1000.0
+                for spec in section_3_3.CAPTION_TYPO_SPECS
+                if spec.figure == 14
+            )
+        )
+        self.assertEqual(
+            section_3_3._experiment_profile(section_3_3.CAPTION_TYPO_SPECS)[
+                "classification"
+            ],
+            "caption_typo_parse_only",
         )
 
     def test_parse_profile_detection_does_not_conflate_rhos(self) -> None:
         self.assertIs(
             section_3_3._parse_mode_expected_specs(section_3_3.ARCHIVED_SPECS),
-            section_3_3.ARCHIVED_SPECS,
+            section_3_3.FRESH_FULL_SPECS,
         )
         self.assertIs(
             section_3_3._parse_mode_expected_specs(section_3_3.FRESH_FULL_SPECS),
             section_3_3.FRESH_FULL_SPECS,
         )
+        self.assertIs(
+            section_3_3._parse_mode_expected_specs(section_3_3.CAPTION_TYPO_SPECS),
+            section_3_3.CAPTION_TYPO_SPECS,
+        )
 
-    def test_fresh_full_command_keeps_manuscript_rho_1000(self) -> None:
+    def test_fresh_full_command_uses_published_rho_2000(self) -> None:
         spec = next(spec for spec in section_3_3.FRESH_FULL_SPECS if spec.figure == 14)
         args = argparse.Namespace(julia="julia", threads=16)
         job = section_3_3._jobs_for_specs(
             args, (spec,), {"case57": Path("/tmp/case57.m")}
         )[0]
 
-        self.assertIn("1000.0", job.command)
-        self.assertNotIn("2000.0", job.command)
+        self.assertIn("2000.0", job.command)
+        self.assertNotIn("1000.0", job.command)
+
+    def test_full_requires_archive_for_raw_comparison(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            args = argparse.Namespace(
+                mode="full", archive=Path(temporary) / "missing.zip"
+            )
+            with self.assertRaisesRegex(SystemExit, "requires experiments_logs.zip"):
+                section_3_3._require_full_archive(args)
+
+    def test_full_rejects_non_paper_threads_before_output_or_jobs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive = root / "experiments_logs.zip"
+            archive.write_bytes(b"placeholder")
+            output = root / "output"
+
+            with mock.patch.object(section_3_3, "run_jobs") as run_jobs:
+                with self.assertRaisesRegex(SystemExit, "requires --threads 16"):
+                    section_3_3.main(
+                        (
+                            "--mode", "full",
+                            "--archive", str(archive),
+                            "--output", str(output),
+                            "--threads", "8",
+                        )
+                    )
+
+                run_jobs.assert_not_called()
+            self.assertFalse(output.exists())
+
+    def test_full_archive_preflight_enforces_strict_reference_before_jobs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive = root / "experiments_logs.zip"
+            archive.write_bytes(b"placeholder")
+            output = root / "full"
+            output.mkdir()
+            args = argparse.Namespace(
+                archive=archive,
+                julia="julia",
+                mode="full",
+            )
+            row_validation = {
+                "status": "passed",
+                "errors": [],
+                "warnings": [],
+            }
+            reference_comparison = {
+                "summary": {
+                    "all_iteration_values_match": True,
+                    "figure_14_reference_applicable": True,
+                    "all_figure_14_reference_values_match": False,
+                }
+            }
+
+            with (
+                mock.patch.object(
+                    section_3_3,
+                    "materialize_archive_section",
+                    return_value=nullcontext(root / "selected"),
+                ),
+                mock.patch.object(
+                    section_3_3,
+                    "_parse_archived_logs",
+                    return_value=(list(section_3_3.ARCHIVED_SPECS), []),
+                ),
+                mock.patch.object(
+                    section_3_3,
+                    "_archive_semantic_manifest",
+                    return_value=(
+                        {
+                            "schema": section_3_3.ARCHIVE_SEMANTIC_SCHEMA,
+                            "records": [],
+                        },
+                        {
+                            "status": "passed",
+                            "errors": [],
+                            "semantic_sha256_matches": True,
+                            "source_bindings_match": True,
+                        },
+                    ),
+                ) as semantic_manifest,
+                mock.patch.object(
+                    section_3_3,
+                    "_validate_rows",
+                    return_value=row_validation,
+                ) as validate_rows,
+                mock.patch.object(section_3_3, "_aggregate", return_value=[]),
+                mock.patch.object(
+                    section_3_3,
+                    "_reference_comparison",
+                    return_value=reference_comparison,
+                ) as compare_reference,
+                mock.patch.object(
+                    section_3_3, "write_provenance"
+                ) as write_failure_provenance,
+            ):
+                with self.assertRaisesRegex(SystemExit, "component times"):
+                    section_3_3._full_archive_preflight(args, output)
+
+            semantic_manifest.assert_called_once()
+            validate_rows.assert_called_once()
+            compare_reference.assert_called_once()
+            write_failure_provenance.assert_called_once()
+            self.assertEqual(
+                write_failure_provenance.call_args.kwargs["inputs"],
+                (archive,),
+            )
+
+            comparison_payload = json.loads(
+                (output / "archive_reference_comparison.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertFalse(
+                comparison_payload["summary"]["all_figure_14_reference_values_match"]
+            )
+            validation_payload = json.loads(
+                (output / "archive_reference_validation.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(validation_payload["status"], "failed")
+            self.assertTrue(
+                any(
+                    "component times" in error
+                    for error in validation_payload["errors"]
+                )
+            )
+
+    def test_full_preflight_stops_at_semantic_digest_before_row_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive = root / "experiments_logs.zip"
+            archive.write_bytes(b"placeholder")
+            output = root / "full"
+            output.mkdir()
+            args = argparse.Namespace(archive=archive, julia="julia", mode="full")
+            semantic_validation = {
+                "status": "failed",
+                "errors": ["Archive semantic SHA256 mismatch"],
+                "semantic_sha256_matches": False,
+                "source_bindings_match": True,
+            }
+
+            with (
+                mock.patch.object(
+                    section_3_3,
+                    "materialize_archive_section",
+                    return_value=nullcontext(root / "selected"),
+                ),
+                mock.patch.object(
+                    section_3_3,
+                    "_parse_archived_logs",
+                    return_value=(list(section_3_3.ARCHIVED_SPECS), []),
+                ),
+                mock.patch.object(
+                    section_3_3,
+                    "_archive_semantic_manifest",
+                    return_value=(
+                        {
+                            "schema": section_3_3.ARCHIVE_SEMANTIC_SCHEMA,
+                            "records": [],
+                        },
+                        semantic_validation,
+                    ),
+                ),
+                mock.patch.object(section_3_3, "_validate_rows") as validate_rows,
+                mock.patch.object(
+                    section_3_3, "_reference_comparison"
+                ) as compare_reference,
+                mock.patch.object(section_3_3, "write_provenance") as provenance,
+            ):
+                with self.assertRaisesRegex(SystemExit, "semantic validation failed"):
+                    section_3_3._full_archive_preflight(args, output)
+
+            validate_rows.assert_not_called()
+            compare_reference.assert_not_called()
+            provenance.assert_called_once()
+            validation_payload = json.loads(
+                (output / "archive_reference_validation.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(validation_payload["status"], "failed")
+            self.assertTrue(
+                any("SHA256 mismatch" in error for error in validation_payload["errors"])
+            )
 
     def test_published_reference_values_are_rho_2000_values(self) -> None:
         self.assertEqual(
@@ -329,6 +641,210 @@ class Section33Figure14ProfileTests(unittest.TestCase):
                     (root / "output" / "reported_source" / target_name).read_bytes(),
                     payload,
                 )
+
+
+class Section33ArchiveSemanticManifestTests(unittest.TestCase):
+    def test_real_archive_matches_independent_semantic_digest(self) -> None:
+        archive = section_3_3.REPO_ROOT / "experiments_logs.zip"
+        if not archive.is_file():
+            self.skipTest("experiments_logs.zip is not present in this checkout")
+
+        with section_3_3.materialize_archive_section(
+            archive, section_3_3.ARCHIVE_SECTION
+        ) as section_root:
+            specs, rows = section_3_3._parse_archived_logs(section_root)
+        manifest, validation = section_3_3._archive_semantic_manifest(
+            rows, archive=archive
+        )
+
+        self.assertEqual(len(specs), 54)
+        self.assertEqual(len(manifest["records"]), 162)
+        self.assertEqual(validation["status"], "passed")
+        self.assertTrue(validation["source_bindings_match"])
+        self.assertEqual(validation["actual_canonical_json_bytes"], 75_278)
+        self.assertEqual(
+            validation["observed_semantic_sha256"],
+            "c2a9cd539527ca3ebcf6873573159e4de5b10b425c8e2a1d23ff288bd95b6d35",
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest_path = Path(temporary) / "archive_semantic_manifest.json"
+            section_3_3._write_archive_semantic_manifest(manifest_path, manifest)
+            manifest_bytes = manifest_path.read_bytes()
+        self.assertEqual(len(manifest_bytes), 75_278)
+        self.assertEqual(
+            hashlib.sha256(manifest_bytes).hexdigest(),
+            "c2a9cd539527ca3ebcf6873573159e4de5b10b425c8e2a1d23ff288bd95b6d35",
+        )
+
+    def test_offsetting_raw_iteration_mutations_fail_digest(self) -> None:
+        rows = _semantic_archive_rows()
+        _, initial = section_3_3._archive_semantic_manifest(rows)
+        expected_digest = initial["observed_semantic_sha256"]
+        expected_bytes = initial["actual_canonical_json_bytes"]
+        constant_patches = (
+            mock.patch.object(
+                section_3_3, "ARCHIVE_SEMANTIC_EXPECTED_SHA256", expected_digest
+            ),
+            mock.patch.object(
+                section_3_3,
+                "ARCHIVE_SEMANTIC_EXPECTED_CANONICAL_BYTES",
+                expected_bytes,
+            ),
+        )
+        with constant_patches[0], constant_patches[1]:
+            _, baseline = section_3_3._archive_semantic_manifest(rows)
+        self.assertEqual(baseline["status"], "passed")
+
+        mutated = [dict(row) for row in rows]
+        first = next(
+            row
+            for row in mutated
+            if (row["case"], row["partition_number"], row["method"])
+            == ("case30", 3, "BFS")
+        )
+        second = next(
+            row
+            for row in mutated
+            if (row["case"], row["partition_number"], row["method"])
+            == ("case30", 4, "BFS")
+        )
+        original_sum = int(first["iterations"]) + int(second["iterations"])
+        first["iterations"] = int(first["iterations"]) + 1
+        second["iterations"] = int(second["iterations"]) - 1
+        self.assertEqual(
+            int(first["iterations"]) + int(second["iterations"]), original_sum
+        )
+
+        with constant_patches[0], constant_patches[1]:
+            _, validation = section_3_3._archive_semantic_manifest(mutated)
+        self.assertEqual(validation["status"], "failed")
+        self.assertTrue(validation["source_bindings_match"])
+        self.assertFalse(validation["semantic_sha256_matches"])
+
+    def test_swapped_job_sources_fail_binding_even_if_digest_is_rebased(self) -> None:
+        rows = [dict(row) for row in _semantic_archive_rows()]
+        p3_id = section_3_3.ARCHIVED_JOB_IDS["case30"][0]
+        p4_id = section_3_3.ARCHIVED_JOB_IDS["case30"][1]
+        for row in rows:
+            if row["archive_folder"] != "case30":
+                continue
+            if row["archive_job_id"] == p3_id:
+                row["archive_job_id"] = p4_id
+            elif row["archive_job_id"] == p4_id:
+                row["archive_job_id"] = p3_id
+
+        _, observed = section_3_3._archive_semantic_manifest(rows)
+        with (
+            mock.patch.object(
+                section_3_3,
+                "ARCHIVE_SEMANTIC_EXPECTED_SHA256",
+                observed["observed_semantic_sha256"],
+            ),
+            mock.patch.object(
+                section_3_3,
+                "ARCHIVE_SEMANTIC_EXPECTED_CANONICAL_BYTES",
+                observed["actual_canonical_json_bytes"],
+            ),
+        ):
+            _, validation = section_3_3._archive_semantic_manifest(rows)
+
+        self.assertTrue(validation["semantic_sha256_matches"])
+        self.assertFalse(validation["source_bindings_match"])
+        self.assertEqual(validation["status"], "failed")
+        self.assertTrue(
+            any("partition_number" in error for error in validation["errors"])
+        )
+
+    def test_actual_log_path_is_bound_before_content_classification(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            section_root = Path(temporary)
+            path = section_root / "case30" / "51455118" / "stdout.log"
+            path.parent.mkdir(parents=True)
+            path.write_text(_log_text(partition_number=4), encoding="utf-8")
+
+            spec, rows = section_3_3._parse_archived_log(section_root, path)
+
+        self.assertEqual(spec.partition_number, 4)
+        self.assertTrue(all(row["archive_folder"] == "case30" for row in rows))
+        self.assertTrue(all(row["archive_job_id"] == "51455118" for row in rows))
+        errors = section_3_3._archive_source_binding_errors(rows)
+        self.assertTrue(
+            any(
+                "case30/51455118" in error and "partition_number=4" in error
+                for error in errors
+            )
+        )
+
+
+class Section33RawArchiveComparisonTests(unittest.TestCase):
+    def test_exact_159_rows_are_gated_and_three_censored_rows_are_reported(self) -> None:
+        fresh, archived = _raw_comparison_rows()
+
+        comparison = section_3_3._raw_archive_comparison(fresh, archived)
+
+        self.assertEqual(comparison["status"], "passed")
+        summary = comparison["summary"]
+        self.assertEqual(summary["expected_raw_row_count"], 162)
+        self.assertTrue(summary["exact_key_identity"])
+        self.assertTrue(summary["all_configurations_match"])
+        self.assertEqual(summary["non_censored_row_count"], 159)
+        self.assertEqual(summary["non_censored_iteration_match_count"], 159)
+        self.assertEqual(summary["non_censored_status_match_count"], 159)
+        self.assertEqual(summary["archive_time_censored_row_count"], 3)
+        self.assertTrue(summary["timings_are_informational_only"])
+        censored = [
+            entry
+            for entry in comparison["entries"]
+            if entry["classification"] == "archive_time_censored"
+        ]
+        self.assertEqual(len(censored), 3)
+        self.assertTrue(all(not entry["iterations_equality_enforced"] for entry in censored))
+        self.assertTrue(all(not entry["status_equality_enforced"] for entry in censored))
+        self.assertTrue(all(not entry["timing_equality_enforced"] for entry in censored))
+
+    def test_non_censored_iteration_and_status_mismatch_fail(self) -> None:
+        fresh, archived = _raw_comparison_rows()
+        fresh[0]["iterations"] = int(fresh[0]["iterations"]) + 1
+        fresh[0]["termination_status"] = "ADMM_TERMINATION_TIME_LIMIT"
+
+        comparison = section_3_3._raw_archive_comparison(fresh, archived)
+
+        self.assertEqual(comparison["status"], "failed")
+        self.assertFalse(comparison["summary"]["all_non_censored_iterations_match"])
+        self.assertFalse(comparison["summary"]["all_non_censored_statuses_match"])
+        self.assertTrue(any("iterations" in error for error in comparison["errors"]))
+        self.assertTrue(any("status" in error for error in comparison["errors"]))
+
+    def test_configuration_mismatch_fails_even_on_censored_row(self) -> None:
+        fresh, archived = _raw_comparison_rows()
+        censored_key = next(iter(section_3_3.ARCHIVE_TIME_CENSORED_KEYS))
+        row = next(item for item in fresh if section_3_3._raw_row_key(item) == censored_key)
+        row["seed"] = 125
+
+        comparison = section_3_3._raw_archive_comparison(fresh, archived)
+
+        self.assertEqual(comparison["status"], "failed")
+        self.assertFalse(comparison["summary"]["all_configurations_match"])
+        self.assertTrue(any("configuration mismatch" in error for error in comparison["errors"]))
+
+    def test_archived_reconstruction_still_requires_exact_retained_times(self) -> None:
+        comparison = {
+            "summary": {
+                "all_iteration_values_match": True,
+                "figure_14_reference_applicable": True,
+                "all_figure_14_iteration_values_match": True,
+                "all_figure_14_reference_values_match": False,
+            }
+        }
+
+        self.assertTrue(
+            any(
+                "component times" in error
+                for error in section_3_3._reference_validation_errors(
+                    comparison, mode="archived", smoke_profile=False
+                )
+            )
+        )
 
 if __name__ == "__main__":
     unittest.main()

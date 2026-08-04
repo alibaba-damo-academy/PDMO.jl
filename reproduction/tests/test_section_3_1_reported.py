@@ -25,6 +25,10 @@ class ReportedSection31Tests(unittest.TestCase):
         self.assertTrue(
             all(check["matched"] for check in validation["configuration_checks"])
         )
+        self.assertIn(
+            "canonical MILP bipartition rendering orientation",
+            {check["label"] for check in validation["configuration_checks"]},
+        )
         configuration = validation["expected_configuration"]
         self.assertEqual(configuration["global_seed"], 126)
         self.assertEqual(configuration["column_clusters"], 4)

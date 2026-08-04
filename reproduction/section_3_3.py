@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import math
 import os
 import re
@@ -33,6 +35,7 @@ from common import (
     job_results_as_dicts,
     julia_command,
     legacy_workdir,
+    materialize_archive_section,
     prepare_mode_output,
     run_jobs,
     sha256_file,
@@ -88,12 +91,57 @@ ARCHIVED_JOB_IDS = {
     "case57_flip_2000": tuple(str(value) for value in range(51523865, 51523871)),
 }
 
-FRESH_FIGURE_14_PROFILE = {
-    "classification": "manuscript_literal_fresh",
-    "initial_rho": 1000.0,
+# A compact canonical JSON manifest independently pins every raw method row
+# selected from the archive.  The digest is deliberately semantic rather than
+# the ZIP-file digest: repacking byte-identical logs must not change it.
+ARCHIVE_SEMANTIC_SCHEMA = "pdmo-section-3.3-archive-semantic-v1"
+ARCHIVE_SEMANTIC_EXPECTED_SHA256 = (
+    "c2a9cd539527ca3ebcf6873573159e4de5b10b425c8e2a1d23ff288bd95b6d35"
+)
+ARCHIVE_SEMANTIC_EXPECTED_RECORD_COUNT = 162
+ARCHIVE_SEMANTIC_EXPECTED_CANONICAL_BYTES = 75_278
+ARCHIVE_SEMANTIC_FIELDS = (
+    "archive_folder",
+    "archive_job_id",
+    "figure",
+    "case",
+    "partition_number",
+    "method",
+    "admm_solver",
+    "initial_rho",
+    "tolerance",
+    "max_iterations",
+    "time_limit_seconds",
+    "log_interval",
+    "r_value",
+    "seed",
+    "threads",
+    "true_dc_objective",
+    "iterations",
+    "termination_status",
+    "partition_time_seconds",
+    "admm_time_seconds",
+)
+
+FRESH_PUBLISHED_FIGURE_14_PROFILE = {
+    "classification": "fresh_published_profile",
+    "initial_rho": 2000.0,
     "source": "fresh Julia execution",
     "archive_folder": None,
     "archive_job_ids": [],
+    "manuscript_caption_initial_rho": 1000.0,
+    "caption_note": (
+        "The Figure 14 caption's rho=1000 is a typo; the retained jobs and "
+        "published panels use rho=2000."
+    ),
+}
+CAPTION_TYPO_FIGURE_14_PROFILE = {
+    "classification": "caption_typo_parse_only",
+    "initial_rho": 1000.0,
+    "source": "optional caller-supplied parse input only",
+    "archive_folder": None,
+    "archive_job_ids": [],
+    "published_initial_rho": 2000.0,
 }
 REPORTED_FIGURE_14_PROFILE = {
     "classification": "historical_reported_archive",
@@ -258,6 +306,12 @@ RUN_FIELDS = (
     "log_path",
 )
 
+ARCHIVE_REFERENCE_RUN_FIELDS = (
+    "archive_folder",
+    "archive_job_id",
+    *RUN_FIELDS,
+)
+
 AGGREGATE_FIELDS = (
     "figure",
     "case",
@@ -297,6 +351,7 @@ class ExperimentSpec:
 
 def _full_specs(
     *,
+    figure_13_job_ids: bool,
     figure_14_rho: float,
     figure_14_archive_folder: str,
     figure_14_job_ids: Sequence[str] | None,
@@ -313,7 +368,7 @@ def _full_specs(
                     "original",
                     100.0,
                     case,
-                    job_ids[offset],
+                    job_ids[offset] if figure_13_job_ids else None,
                 )
             )
     flip_ids = tuple(figure_14_job_ids or ())
@@ -333,32 +388,50 @@ def _full_specs(
 
 
 FRESH_FULL_SPECS = _full_specs(
-    figure_14_rho=1000.0,
-    figure_14_archive_folder="case57_flip_1000",
+    figure_13_job_ids=False,
+    figure_14_rho=2000.0,
+    figure_14_archive_folder="case57_flip_2000",
     figure_14_job_ids=None,
 )
 ARCHIVED_SPECS = _full_specs(
+    figure_13_job_ids=True,
     figure_14_rho=2000.0,
     figure_14_archive_folder="case57_flip_2000",
     figure_14_job_ids=ARCHIVED_JOB_IDS["case57_flip_2000"],
 )
+CAPTION_TYPO_SPECS = _full_specs(
+    figure_13_job_ids=False,
+    figure_14_rho=1000.0,
+    figure_14_archive_folder="case57_flip_1000",
+    figure_14_job_ids=None,
+)
 SMOKE_SPECS = (FRESH_FULL_SPECS[0],)
 FRESH_SPEC_BY_KEY = {spec.key: spec for spec in FRESH_FULL_SPECS}
 ARCHIVED_SPEC_BY_KEY = {spec.key: spec for spec in ARCHIVED_SPECS}
+ARCHIVED_SPEC_BY_SOURCE = {
+    (spec.archive_folder, str(spec.archive_job_id)): spec
+    for spec in ARCHIVED_SPECS
+}
+CAPTION_TYPO_SPEC_BY_KEY = {spec.key: spec for spec in CAPTION_TYPO_SPECS}
 
 def _experiment_profile(
     specs: Sequence[ExperimentSpec],
 ) -> dict[str, object]:
     figure_14_specs = [spec for spec in specs if spec.figure == 14]
     if not figure_14_specs:
-        classification = "manuscript_literal_fresh_smoke"
-        figure_14 = {**FRESH_FIGURE_14_PROFILE, "included": False}
+        classification = "fresh_published_profile_smoke"
+        figure_14 = {**FRESH_PUBLISHED_FIGURE_14_PROFILE, "included": False}
     elif all(_close(spec.rho, 1000.0) for spec in figure_14_specs):
-        classification = "manuscript_literal_fresh"
-        figure_14 = {**FRESH_FIGURE_14_PROFILE, "included": True}
+        classification = "caption_typo_parse_only"
+        figure_14 = {**CAPTION_TYPO_FIGURE_14_PROFILE, "included": True}
     elif all(_close(spec.rho, 2000.0) for spec in figure_14_specs):
-        classification = "historical_reported_archive"
-        figure_14 = {**REPORTED_FIGURE_14_PROFILE, "included": True}
+        archived = all(spec.archive_job_id is not None for spec in figure_14_specs)
+        if archived:
+            classification = "historical_reported_archive"
+            figure_14 = {**REPORTED_FIGURE_14_PROFILE, "included": True}
+        else:
+            classification = "fresh_published_profile"
+            figure_14 = {**FRESH_PUBLISHED_FIGURE_14_PROFILE, "included": True}
     else:
         classification = "mixed_incompatible_profiles"
         figure_14 = {
@@ -375,7 +448,11 @@ def _experiment_profile(
             "source": "same configuration in fresh and retained runs",
         },
         "figure_14": figure_14,
-        "profiles_are_not_interchangeable": "Archived reported rho=2000 and fresh manuscript-literal rho=1000 results must not be merged.",
+        "profile_note": (
+            "Fresh full reruns and archived reconstruction use the same published rho=2000 "
+            "configuration but remain separately labeled artifacts. The caption-typo rho=1000 "
+            "profile is accepted only for parsing caller-supplied historical data."
+        ),
     }
 
 
@@ -389,7 +466,9 @@ def _resolve_python(value: Path | None) -> str:
         )
     expanded = Path(candidate).expanduser()
     if expanded.is_file():
-        return str(expanded.resolve())
+        # Preserve a virtual environment's executable symlink: resolving it to
+        # the base interpreter changes sys.prefix and hides the venv packages.
+        return str(expanded.absolute())
     resolved = shutil.which(candidate)
     if resolved:
         return resolved
@@ -601,18 +680,40 @@ def _preserve_reported_figure_14_panels(
 
 
 def _archive_log_identifier(archive: Path, row: Mapping[str, object]) -> str:
-    spec = ARCHIVED_SPEC_BY_KEY[
-        (int(row["figure"]), str(row["case"]), int(row["partition_number"]))
-    ]
-    assert spec.archive_job_id is not None
+    archive_folder = str(row.get("archive_folder", ""))
+    archive_job_id = str(row.get("archive_job_id", ""))
+    if not archive_folder or not archive_job_id:
+        spec = ARCHIVED_SPEC_BY_KEY[
+            (int(row["figure"]), str(row["case"]), int(row["partition_number"]))
+        ]
+        assert spec.archive_job_id is not None
+        archive_folder = spec.archive_folder
+        archive_job_id = spec.archive_job_id
     member = (
         Path("experiments_logs")
         / ARCHIVE_SECTION
-        / spec.archive_folder
-        / spec.archive_job_id
+        / archive_folder
+        / archive_job_id
         / "stdout.log"
     )
     return f"{archive.expanduser().resolve()}::{member.as_posix()}"
+
+
+def _archive_source_identity(section_root: Path, path: Path) -> tuple[str, str]:
+    """Return the actual selected folder/job encoded by an extracted log path."""
+
+    try:
+        relative = path.relative_to(section_root)
+    except ValueError as error:
+        raise ValueError(f"{path}: archive log is outside section root {section_root}") from error
+    if len(relative.parts) != 3 or relative.parts[2] != "stdout.log":
+        raise ValueError(
+            f"{path}: expected archive member layout <folder>/<job_id>/stdout.log"
+        )
+    archive_folder, archive_job_id, _ = relative.parts
+    if not archive_job_id.isdecimal():
+        raise ValueError(f"{path}: archive job id is not decimal: {archive_job_id!r}")
+    return archive_folder, archive_job_id
 
 def _match_required(pattern: str, text: str, label: str, path: Path) -> str:
     match = re.search(pattern, text, flags=re.MULTILINE)
@@ -670,7 +771,7 @@ def _classify_spec(
         candidates = FRESH_SPEC_BY_KEY
     elif solver == "doubly" and math.isclose(rho, 1000.0):
         key = (14, case, partition_number)
-        candidates = FRESH_SPEC_BY_KEY
+        candidates = CAPTION_TYPO_SPEC_BY_KEY
     elif solver == "doubly" and math.isclose(rho, 2000.0):
         key = (14, case, partition_number)
         candidates = ARCHIVED_SPEC_BY_KEY
@@ -863,8 +964,240 @@ def _parse_logs(paths: Iterable[Path]) -> tuple[list[ExperimentSpec], list[dict[
     return specs, rows
 
 
+def _parse_archived_log(
+    section_root: Path, path: Path
+) -> tuple[ExperimentSpec, list[dict[str, object]]]:
+    """Parse one retained log while preserving its actual source identity."""
+
+    archive_folder, archive_job_id = _archive_source_identity(section_root, path)
+    spec, rows = _parse_log(path)
+    for row in rows:
+        row["archive_folder"] = archive_folder
+        row["archive_job_id"] = archive_job_id
+    return spec, rows
+
+
+def _parse_archived_logs(
+    section_root: Path,
+) -> tuple[list[ExperimentSpec], list[dict[str, object]]]:
+    """Parse the selected paper logs with path-derived folder/job bindings."""
+
+    specs: list[ExperimentSpec] = []
+    rows: list[dict[str, object]] = []
+    errors: list[str] = []
+    for path in _archived_final_logs(section_root):
+        try:
+            spec, parsed = _parse_archived_log(section_root, path)
+        except (OSError, ValueError) as error:
+            errors.append(str(error))
+            continue
+        specs.append(spec)
+        rows.extend(parsed)
+    if errors:
+        formatted = "\n".join(f"  - {error}" for error in errors)
+        raise SystemExit(f"Failed to parse selected Section 3.3 archive logs:\n{formatted}")
+    if not rows:
+        raise SystemExit("No complete selected Section 3.3 archive logs were found")
+    return specs, rows
+
+
 def _close(left: float, right: float) -> bool:
     return math.isclose(left, right, rel_tol=1.0e-10, abs_tol=1.0e-12)
+
+
+def _archive_source_binding_errors(
+    rows: Sequence[Mapping[str, object]],
+) -> list[str]:
+    """Check that each actual archive folder/job contains its assigned paper job."""
+
+    grouped: dict[tuple[str, str], list[Mapping[str, object]]] = defaultdict(list)
+    errors: list[str] = []
+    for index, row in enumerate(rows):
+        archive_folder = str(row.get("archive_folder", ""))
+        archive_job_id = str(row.get("archive_job_id", ""))
+        if not archive_folder or not archive_job_id.isdecimal():
+            errors.append(
+                f"archive semantic row {index} has invalid source identity "
+                f"folder={archive_folder!r}, job_id={archive_job_id!r}"
+            )
+            continue
+        grouped[(archive_folder, archive_job_id)].append(row)
+
+    expected_sources = set(ARCHIVED_SPEC_BY_SOURCE)
+    actual_sources = set(grouped)
+    if actual_sources != expected_sources:
+        errors.append(
+            "Selected Section 3.3 archive source-job manifest differs from the paper "
+            f"manifest; missing={sorted(expected_sources - actual_sources)}, "
+            f"extra={sorted(actual_sources - expected_sources)}"
+        )
+
+    for source in sorted(expected_sources, key=lambda item: (item[0], int(item[1]))):
+        source_rows = grouped.get(source)
+        if source_rows is None:
+            continue
+        spec = ARCHIVED_SPEC_BY_SOURCE[source]
+        method_counts = Counter(str(row.get("method", "")) for row in source_rows)
+        if method_counts != Counter(METHODS):
+            errors.append(
+                f"archive source {source[0]}/{source[1]} has method rows "
+                f"{dict(method_counts)}, expected one each of {list(METHODS)}"
+            )
+        for row in source_rows:
+            method = str(row.get("method", ""))
+            exact_checks = (
+                (int(row["figure"]) == spec.figure, "figure", spec.figure),
+                (str(row["case"]) == spec.case, "case", spec.case),
+                (
+                    int(row["partition_number"]) == spec.partition_number,
+                    "partition_number",
+                    spec.partition_number,
+                ),
+                (str(row["admm_solver"]) == spec.solver, "admm_solver", spec.solver),
+                (int(row["max_iterations"]) == MAX_ITERATIONS, "max_iterations", MAX_ITERATIONS),
+                (int(row["log_interval"]) == LOG_INTERVAL, "log_interval", LOG_INTERVAL),
+                (int(row["seed"]) == SEED, "seed", SEED),
+                (int(row["threads"]) == 16, "threads", 16),
+            )
+            float_checks = (
+                (float(row["initial_rho"]), spec.rho, "initial_rho"),
+                (float(row["tolerance"]), TOLERANCE, "tolerance"),
+                (
+                    float(row["time_limit_seconds"]),
+                    TIME_LIMIT_SECONDS,
+                    "time_limit_seconds",
+                ),
+                (float(row["r_value"]), R_VALUE, "r_value"),
+                (
+                    float(row["true_dc_objective"]),
+                    OBJECTIVE_FINGERPRINTS[spec.case],
+                    "true_dc_objective",
+                ),
+            )
+            for passed, field, expected in exact_checks:
+                if not passed:
+                    errors.append(
+                        f"archive source {source[0]}/{source[1]}/{method} is bound to "
+                        f"{field}={row[field]!r}, expected {expected!r}"
+                    )
+            for observed, expected, field in float_checks:
+                if not _close(observed, expected):
+                    errors.append(
+                        f"archive source {source[0]}/{source[1]}/{method} is bound to "
+                        f"{field}={observed!r}, expected {expected!r}"
+                    )
+    return errors
+
+
+def _archive_semantic_payload(
+    rows: Sequence[Mapping[str, object]],
+) -> dict[str, object]:
+    """Return the compact-digest payload for all selected archive method rows."""
+
+    records: list[dict[str, object]] = []
+    for row in rows:
+        record = {field: row[field] for field in ARCHIVE_SEMANTIC_FIELDS}
+        # Source job IDs are path components, not numeric experiment values.
+        record["archive_folder"] = str(record["archive_folder"])
+        record["archive_job_id"] = str(record["archive_job_id"])
+        records.append(record)
+    records.sort(
+        key=lambda record: (
+            str(record["archive_folder"]),
+            int(str(record["archive_job_id"])),
+            str(record["method"]),
+        )
+    )
+    return {"schema": ARCHIVE_SEMANTIC_SCHEMA, "records": records}
+
+
+def _archive_semantic_json_bytes(payload: Mapping[str, object]) -> bytes:
+    return json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+def _write_archive_semantic_manifest(
+    path: Path, payload: Mapping[str, object]
+) -> None:
+    """Write the manifest itself in its digest-bearing canonical form."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_bytes(_archive_semantic_json_bytes(payload))
+    temporary.replace(path)
+
+
+def _archive_semantic_manifest(
+    rows: Sequence[Mapping[str, object]],
+    *,
+    archive: Path | None = None,
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Build and validate the independently pinned semantic archive manifest."""
+
+    errors = _archive_source_binding_errors(rows)
+    payload: dict[str, object] = {
+        "schema": ARCHIVE_SEMANTIC_SCHEMA,
+        "records": [],
+    }
+    canonical = b""
+    observed_sha256 = ""
+    try:
+        payload = _archive_semantic_payload(rows)
+        canonical = _archive_semantic_json_bytes(payload)
+        observed_sha256 = hashlib.sha256(canonical).hexdigest()
+    except (KeyError, TypeError, ValueError) as error:
+        errors.append(f"Could not serialize Section 3.3 archive semantic manifest: {error}")
+
+    if len(rows) != ARCHIVE_SEMANTIC_EXPECTED_RECORD_COUNT:
+        errors.append(
+            f"Archive semantic manifest has {len(rows)} rows, expected "
+            f"{ARCHIVE_SEMANTIC_EXPECTED_RECORD_COUNT}"
+        )
+    if len(canonical) != ARCHIVE_SEMANTIC_EXPECTED_CANONICAL_BYTES:
+        errors.append(
+            f"Archive semantic canonical JSON has {len(canonical)} bytes, expected "
+            f"{ARCHIVE_SEMANTIC_EXPECTED_CANONICAL_BYTES}"
+        )
+    if observed_sha256 != ARCHIVE_SEMANTIC_EXPECTED_SHA256:
+        errors.append(
+            f"Archive semantic SHA256 is {observed_sha256 or '<unavailable>'}, expected "
+            f"{ARCHIVE_SEMANTIC_EXPECTED_SHA256}"
+        )
+
+    actual_sources = {
+        (str(row.get("archive_folder", "")), str(row.get("archive_job_id", "")))
+        for row in rows
+        if row.get("archive_folder", "") and row.get("archive_job_id", "")
+    }
+    validation: dict[str, object] = {
+        "status": "passed" if not errors else "failed",
+        "schema": ARCHIVE_SEMANTIC_SCHEMA,
+        "canonicalization": (
+            "UTF-8 JSON with sort_keys=True, separators=(',', ':'), allow_nan=False"
+        ),
+        "record_sort_key": ["archive_folder", "integer archive_job_id", "method"],
+        "fields": list(ARCHIVE_SEMANTIC_FIELDS),
+        "expected_record_count": ARCHIVE_SEMANTIC_EXPECTED_RECORD_COUNT,
+        "actual_record_count": len(rows),
+        "expected_source_job_count": len(ARCHIVED_SPEC_BY_SOURCE),
+        "actual_source_job_count": len(actual_sources),
+        "source_bindings_match": not _archive_source_binding_errors(rows),
+        "expected_canonical_json_bytes": ARCHIVE_SEMANTIC_EXPECTED_CANONICAL_BYTES,
+        "actual_canonical_json_bytes": len(canonical),
+        "expected_semantic_sha256": ARCHIVE_SEMANTIC_EXPECTED_SHA256,
+        "observed_semantic_sha256": observed_sha256,
+        "semantic_sha256_matches": observed_sha256 == ARCHIVE_SEMANTIC_EXPECTED_SHA256,
+        "errors": errors,
+    }
+    if archive is not None and archive.is_file():
+        validation["archive_zip_path"] = str(archive.expanduser().resolve())
+        validation["archive_zip_sha256"] = sha256_file(archive)
+        validation["archive_zip_sha256_is_informational"] = True
+    return payload, validation
 
 
 def _validate_rows(
@@ -905,6 +1238,7 @@ def _validate_rows(
                 (int(row["log_interval"]) == LOG_INTERVAL, "log interval"),
                 (_close(float(row["r_value"]), R_VALUE), "r_value"),
                 (int(row["seed"]) == SEED, "seed"),
+                (int(row["threads"]) == 16, "threads"),
                 (float(row["partition_time_seconds"]) >= 0.0, "partition time"),
                 (float(row["admm_time_seconds"]) >= 0.0, "ADMM time"),
                 (int(row["iterations"]) > 0, "iterations"),
@@ -963,6 +1297,259 @@ def _validate_rows(
         "errors": errors,
         "warnings": [],
     }
+
+
+ARCHIVE_TIME_CENSORED_KEYS = frozenset(
+    (13, "case1888rte", 10, method) for method in METHODS
+)
+RAW_ARCHIVE_CONFIG_FIELDS = (
+    "figure",
+    "case",
+    "partition_number",
+    "method",
+    "admm_solver",
+    "initial_rho",
+    "tolerance",
+    "max_iterations",
+    "time_limit_seconds",
+    "log_interval",
+    "r_value",
+    "seed",
+    "threads",
+)
+RAW_ARCHIVE_FLOAT_CONFIG_FIELDS = frozenset(
+    ("initial_rho", "tolerance", "time_limit_seconds", "r_value")
+)
+
+
+def _raw_row_key(row: Mapping[str, object]) -> tuple[int, str, int, str]:
+    return (
+        int(row["figure"]),
+        str(row["case"]),
+        int(row["partition_number"]),
+        str(row["method"]),
+    )
+
+
+def _raw_row_index(
+    rows: Sequence[Mapping[str, object]], *, label: str
+) -> tuple[dict[tuple[int, str, int, str], Mapping[str, object]], list[str]]:
+    index: dict[tuple[int, str, int, str], Mapping[str, object]] = {}
+    duplicates: list[str] = []
+    for row in rows:
+        key = _raw_row_key(row)
+        if key in index:
+            duplicates.append(f"{label} contains duplicate raw row {key}")
+        else:
+            index[key] = row
+    return index, duplicates
+
+
+def _raw_config_values_match(field: str, left: object, right: object) -> bool:
+    if field in RAW_ARCHIVE_FLOAT_CONFIG_FIELDS:
+        return _close(float(left), float(right))
+    return left == right
+
+
+def _raw_archive_comparison(
+    fresh_rows: Sequence[Mapping[str, object]],
+    archive_rows: Sequence[Mapping[str, object]],
+) -> dict[str, object]:
+    """Compare a fresh full sweep with the 162 raw rows used by the paper.
+
+    Runtime is always informational. The three case1888rte/P=10 archive rows
+    were stopped by the 7200-second limit, so their fresh iterations and
+    terminal statuses are also reported without an equality gate.
+    """
+
+    expected_keys = {
+        (*spec.key, method) for spec in FRESH_FULL_SPECS for method in METHODS
+    }
+    fresh_index, fresh_errors = _raw_row_index(fresh_rows, label="fresh run")
+    archive_index, archive_errors = _raw_row_index(
+        archive_rows, label="published archive"
+    )
+    errors = fresh_errors + archive_errors
+    fresh_keys = set(fresh_index)
+    archive_keys = set(archive_index)
+    if fresh_keys != expected_keys:
+        errors.append(
+            "Fresh raw row keys do not match the 162-row published grid; "
+            f"missing={sorted(expected_keys - fresh_keys)}, "
+            f"extra={sorted(fresh_keys - expected_keys)}"
+        )
+    if archive_keys != expected_keys:
+        errors.append(
+            "Archive raw row keys do not match the 162-row published selection; "
+            f"missing={sorted(expected_keys - archive_keys)}, "
+            f"extra={sorted(archive_keys - expected_keys)}"
+        )
+
+    entries: list[dict[str, object]] = []
+    config_match_count = 0
+    iteration_match_count = 0
+    status_match_count = 0
+    non_censored_count = 0
+    censored_count = 0
+    for key in sorted(expected_keys):
+        fresh = fresh_index.get(key)
+        archived = archive_index.get(key)
+        if fresh is None or archived is None:
+            continue
+        config_differences: dict[str, dict[str, object]] = {}
+        for field in RAW_ARCHIVE_CONFIG_FIELDS:
+            fresh_value = fresh[field]
+            archive_value = archived[field]
+            if not _raw_config_values_match(field, fresh_value, archive_value):
+                config_differences[field] = {
+                    "fresh": fresh_value,
+                    "archive": archive_value,
+                }
+        config_matches = not config_differences
+        if config_matches:
+            config_match_count += 1
+        else:
+            errors.append(f"{key}: fresh/archive configuration mismatch {config_differences}")
+
+        archive_time_censored = key in ARCHIVE_TIME_CENSORED_KEYS
+        fresh_iterations = int(fresh["iterations"])
+        archive_iterations = int(archived["iterations"])
+        fresh_status = str(fresh["termination_status"])
+        archive_status = str(archived["termination_status"])
+        iteration_matches = fresh_iterations == archive_iterations
+        status_matches = fresh_status == archive_status
+        if archive_time_censored:
+            censored_count += 1
+            if archive_status != "ADMM_TERMINATION_TIME_LIMIT":
+                errors.append(
+                    f"{key}: selected archive row is classified as time-censored "
+                    f"but has status {archive_status!r}"
+                )
+        else:
+            non_censored_count += 1
+            if iteration_matches:
+                iteration_match_count += 1
+            else:
+                errors.append(
+                    f"{key}: fresh iterations {fresh_iterations} do not exactly match "
+                    f"archive iterations {archive_iterations}"
+                )
+            if status_matches:
+                status_match_count += 1
+            else:
+                errors.append(
+                    f"{key}: fresh status {fresh_status!r} does not exactly match "
+                    f"archive status {archive_status!r}"
+                )
+
+        fresh_partition_time = float(fresh["partition_time_seconds"])
+        archive_partition_time = float(archived["partition_time_seconds"])
+        fresh_admm_time = float(fresh["admm_time_seconds"])
+        archive_admm_time = float(archived["admm_time_seconds"])
+        entries.append(
+            {
+                "figure": key[0],
+                "case": key[1],
+                "partition_number": key[2],
+                "method": key[3],
+                "classification": (
+                    "archive_time_censored"
+                    if archive_time_censored
+                    else "deterministic_non_censored"
+                ),
+                "configuration_matches": config_matches,
+                "configuration_differences": config_differences,
+                "fresh_iterations": fresh_iterations,
+                "archive_iterations": archive_iterations,
+                "iterations_match": iteration_matches,
+                "iterations_equality_enforced": not archive_time_censored,
+                "fresh_status": fresh_status,
+                "archive_status": archive_status,
+                "statuses_match": status_matches,
+                "status_equality_enforced": not archive_time_censored,
+                "fresh_partition_time_seconds": fresh_partition_time,
+                "archive_partition_time_seconds": archive_partition_time,
+                "partition_time_difference_seconds": (
+                    fresh_partition_time - archive_partition_time
+                ),
+                "fresh_admm_time_seconds": fresh_admm_time,
+                "archive_admm_time_seconds": archive_admm_time,
+                "admm_time_difference_seconds": fresh_admm_time - archive_admm_time,
+                "timing_equality_enforced": False,
+            }
+        )
+
+    exact_key_identity = (
+        not fresh_errors
+        and not archive_errors
+        and fresh_keys == expected_keys
+        and archive_keys == expected_keys
+    )
+    summary = {
+        "expected_raw_row_count": len(expected_keys),
+        "fresh_raw_row_count": len(fresh_rows),
+        "archive_raw_row_count": len(archive_rows),
+        "exact_key_identity": exact_key_identity,
+        "configuration_rows_compared": len(entries),
+        "configuration_match_count": config_match_count,
+        "all_configurations_match": (
+            len(entries) == len(expected_keys) and config_match_count == len(expected_keys)
+        ),
+        "non_censored_row_count": non_censored_count,
+        "non_censored_iteration_match_count": iteration_match_count,
+        "non_censored_status_match_count": status_match_count,
+        "all_non_censored_iterations_match": (
+            non_censored_count == 159 and iteration_match_count == 159
+        ),
+        "all_non_censored_statuses_match": (
+            non_censored_count == 159 and status_match_count == 159
+        ),
+        "archive_time_censored_row_count": censored_count,
+        "archive_time_censored_keys": [list(key) for key in sorted(ARCHIVE_TIME_CENSORED_KEYS)],
+        "timings_are_informational_only": True,
+    }
+    return {
+        "status": "passed" if not errors else "failed",
+        "reference": (
+            "The exact 54 selected stdout.log files (162 method rows) in "
+            "experiments_logs.zip that generated Figures 13 and 14"
+        ),
+        "comparison_policy": {
+            "key_and_configuration_identity": "enforced for all 162 rows",
+            "iteration_and_status_identity": "enforced for 159 non-censored rows",
+            "archive_time_censored_rows": (
+                "case1888rte/P=10 BFS, MILP, and GNN are reported without fresh "
+                "iteration or status equality gates"
+            ),
+            "timings": "informational only for every row",
+        },
+        "summary": summary,
+        "errors": errors,
+        "entries": entries,
+    }
+
+
+def _merge_raw_archive_validation(
+    validation: Mapping[str, object],
+    archive_validation: Mapping[str, object],
+    comparison: Mapping[str, object],
+) -> dict[str, object]:
+    merged = dict(validation)
+    errors = list(validation.get("errors", ()))
+    errors.extend(
+        f"Published archive validation: {error}"
+        for error in archive_validation.get("errors", ())
+    )
+    errors.extend(str(error) for error in comparison.get("errors", ()))
+    merged["archive_reference_validation"] = {
+        key: value
+        for key, value in archive_validation.items()
+        if key not in {"errors", "warnings"}
+    }
+    merged["archive_raw_comparison_summary"] = comparison.get("summary")
+    merged["errors"] = errors
+    merged["status"] = "passed" if not errors else "failed"
+    return merged
 
 
 def _aggregate(rows: Sequence[Mapping[str, object]]) -> list[dict[str, object]]:
@@ -1428,6 +2015,11 @@ def _reference_comparison(
         and max_figure_14_partition_time_difference <= 1.0e-9
         and max_figure_14_admm_time_difference <= 1.0e-9
     )
+    all_figure_14_iteration_values_match = (
+        figure_14_reference_applicable
+        and len(figure_14_entries) == len(FIGURE_14_PARTITIONS) * len(METHODS)
+        and max_figure_14_iteration_difference <= 1.0e-9
+    )
     return {
         "reference": "experiments_logs.zip final Section 3.3 folders used for paper Figures 13-14",
         "figure_14_reference_profile": REPORTED_FIGURE_14_PROFILE,
@@ -1438,7 +2030,7 @@ def _reference_comparison(
             "Runtime is hardware- and environment-dependent and is reported without pass/fail gating.",
             "The archived case1888rte/P=10 runs hit the 7200-second limit for all methods.",
             "Figure 14 references are the exact retained rho=2000 values behind the published arXiv panels.",
-            "They are explicitly not applicable to a fresh manuscript-literal rho=1000 Figure 14 run.",
+            "Fresh full mode uses that same published rho=2000 configuration.",
         ],
         "summary": {
             "compared_entries": len(entries),
@@ -1446,6 +2038,7 @@ def _reference_comparison(
             "maximum_absolute_iteration_difference": max_iteration_difference,
             "maximum_absolute_normalized_iteration_difference": max_normalized_iteration_difference,
             "figure_14_reference_applicable": figure_14_reference_applicable,
+            "all_figure_14_iteration_values_match": all_figure_14_iteration_values_match,
             "all_figure_14_reference_values_match": all_figure_14_reference_values_match,
             "maximum_absolute_figure_14_iteration_difference": max_figure_14_iteration_difference,
             "maximum_absolute_figure_14_partition_time_difference_seconds": max_figure_14_partition_time_difference,
@@ -1540,8 +2133,6 @@ def _runtime_summary(rows: Sequence[Mapping[str, object]]) -> dict[str, object]:
         "by_case_seconds": dict(sorted(by_case.items())),
         "reported_rho2000_archive_full_sweep_seconds": 118954.649,
         "reported_rho2000_archive_full_sweep_hours": 118954.649 / 3600.0,
-        "rho1000_retained_comparison_sweep_seconds": 122889.742,
-        "rho1000_retained_comparison_sweep_hours": 122889.742 / 3600.0,
         "scope_note": (
             "Times sum only bipartization and ADMM times reported by the driver; dependency "
             "installation, compilation, centralized Ipopt solve, and process startup are excluded."
@@ -1557,19 +2148,22 @@ def _parse_mode_expected_specs(
     specs: Sequence[ExperimentSpec],
 ) -> tuple[ExperimentSpec, ...]:
     actual = {_spec_signature(spec) for spec in specs}
-    profiles = (SMOKE_SPECS, FRESH_FULL_SPECS, ARCHIVED_SPECS)
+    # Raw logs do not encode whether a rho=2000 run was freshly executed or
+    # extracted from the archive. Prefer the fresh published-profile label for
+    # caller-supplied parse inputs; archived mode selects ARCHIVED_SPECS itself.
+    profiles = (SMOKE_SPECS, FRESH_FULL_SPECS, CAPTION_TYPO_SPECS)
     for expected in profiles:
         expected_signatures = {_spec_signature(spec) for spec in expected}
         if len(specs) == len(expected) and actual == expected_signatures:
             return expected
 
-    fresh = {_spec_signature(spec) for spec in FRESH_FULL_SPECS}
-    missing = sorted(fresh - actual)
-    extra = sorted(actual - fresh)
+    published = {_spec_signature(spec) for spec in FRESH_FULL_SPECS}
+    missing = sorted(published - actual)
+    extra = sorted(actual - published)
     raise SystemExit(
-        "--mode parse expects the documented smoke grid, the fresh manuscript-literal "
-        "rho=1000 full grid, or the reported archived rho=2000 full grid; "
-        f"missing_from_fresh_full={missing}, extra_or_profile_mismatch={extra}"
+        "--mode parse expects the documented smoke grid, the published rho=2000 "
+        "full grid, or the optional caption-typo rho=1000 parse grid; "
+        f"missing_from_published_full={missing}, extra_or_profile_mismatch={extra}"
     )
 
 
@@ -1597,9 +2191,136 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _require_full_archive(args: argparse.Namespace) -> None:
+    if args.mode == "full" and not args.archive.expanduser().exists():
+        raise SystemExit(
+            "Section 3.3 --mode full requires experiments_logs.zip so every fresh "
+            "raw row can be checked against the exact published selection. "
+            f"Archive not found: {args.archive}\n"
+            "Pass --archive /path/to/experiments_logs.zip."
+        )
+
+
+def _require_full_threads(args: argparse.Namespace) -> None:
+    if args.mode == "full" and args.threads != 16:
+        raise SystemExit(
+            "Section 3.3 --mode full reproduces the published configuration and "
+            "therefore requires --threads 16."
+        )
+
+
+def _full_archive_preflight(
+    args: argparse.Namespace,
+    output: Path,
+) -> tuple[list[dict[str, object]], dict[str, object]]:
+    """Validate the exact published archive selection before fresh jobs launch."""
+
+    try:
+        with materialize_archive_section(args.archive, ARCHIVE_SECTION) as archive_source:
+            _, archive_rows = _parse_archived_logs(archive_source)
+        for row in archive_rows:
+            row["log_path"] = _archive_log_identifier(args.archive, row)
+
+        semantic_payload, semantic_validation = _archive_semantic_manifest(
+            archive_rows,
+            archive=args.archive,
+        )
+        _write_archive_semantic_manifest(
+            output / "archive_semantic_manifest.json", semantic_payload
+        )
+        write_json(output / "archive_semantic_validation.json", semantic_validation)
+        write_csv(
+            output / "archive_reference_runs.csv",
+            ARCHIVE_REFERENCE_RUN_FIELDS,
+            archive_rows,
+        )
+        if semantic_validation["status"] != "passed":
+            semantic_errors = [
+                f"Archive semantic manifest: {error}"
+                for error in semantic_validation["errors"]
+            ]
+            archive_validation = {
+                "status": "failed",
+                "errors": semantic_errors,
+                "warnings": [],
+                "archive_semantic_validation": {
+                    key: value
+                    for key, value in semantic_validation.items()
+                    if key != "errors"
+                },
+            }
+            write_json(output / "archive_reference_validation.json", archive_validation)
+            formatted = "\n".join(f"  - {error}" for error in semantic_errors)
+            raise SystemExit(
+                "Section 3.3 published archive semantic validation failed before "
+                "fresh Julia launch:\n" + formatted
+            )
+
+        archive_validation = _validate_rows(
+            archive_rows,
+            ARCHIVED_SPECS,
+            require_archived_statuses=True,
+            check_objectives=True,
+        )
+        archive_validation["archive_semantic_validation"] = {
+            key: value
+            for key, value in semantic_validation.items()
+            if key != "errors"
+        }
+        write_json(output / "archive_reference_validation.json", archive_validation)
+        if archive_validation["status"] != "passed":
+            formatted = "\n".join(
+                f"  - {error}" for error in archive_validation["errors"]
+            )
+            raise SystemExit(
+                "Section 3.3 published archive reference validation failed:\n" + formatted
+            )
+
+        archive_reference_comparison = _reference_comparison(
+            _aggregate(archive_rows),
+            archive_rows,
+            smoke_profile=False,
+        )
+        archive_validation = _merge_reference_validation(
+            archive_validation,
+            archive_reference_comparison,
+            mode="archived",
+            smoke_profile=False,
+        )
+
+        write_json(
+            output / "archive_reference_comparison.json",
+            archive_reference_comparison,
+        )
+        write_json(output / "archive_reference_validation.json", archive_validation)
+        if archive_validation["status"] != "passed":
+            formatted = "\n".join(
+                f"  - {error}" for error in archive_validation["errors"]
+            )
+            raise SystemExit(
+                "Section 3.3 published archive reference validation failed:\n" + formatted
+            )
+    except SystemExit:
+        write_provenance(
+            output,
+            section="Section 3.3 / distributed DC-OPF Figures 13-14",
+            args=args,
+            jobs=(),
+            inputs=(args.archive,),
+            notes=(
+                "Full-mode archive preflight failed before any fresh Julia job was launched.",
+            ),
+        )
+        raise
+
+    return archive_rows, archive_validation
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     validate_common_arguments(args)
+    _require_full_threads(args)
+    _require_full_archive(args)
     output = prepare_mode_output(args.output, args.mode)
 
     fresh = args.mode in ("smoke", "full")
@@ -1611,9 +2332,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         expected_specs = FRESH_FULL_SPECS
     jobs: list[Job] = []
     job_results = []
-    provenance_inputs: list[Path] = []
+    provenance_inputs: list[Path] = [args.archive] if args.mode == "full" else []
     fresh_log_paths: list[Path] = []
     reported_panel_validation: dict[str, object] | None = None
+    archive_rows: list[dict[str, object]] = []
+    archive_validation: dict[str, object] | None = None
+    archived_semantic_validation: dict[str, object] | None = None
+
+    if args.mode == "full":
+        archive_rows, archive_validation = _full_archive_preflight(args, output)
 
     if fresh:
         case_files = _matpower_inputs(args.matpower_dir, expected_specs)
@@ -1626,7 +2353,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         jobs = _jobs_for_specs(args, expected_specs, case_files)
         if args.mode == "full":
             print(
-                "Full Section 3.3 sweep: archived partition+ADMM time is about 34.1 hours "
+                "Full Section 3.3 published-profile sweep: archived partition+ADMM time is about 33.0 hours "
                 "with one worker; setup and compilation are additional.",
                 flush=True,
             )
@@ -1646,7 +2373,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 section="Section 3.3 / DC-OPF Figures 13-14",
                 args=args,
                 jobs=jobs,
-                inputs=tuple(case_files.values()) + (model_weights,),
+                inputs=tuple(provenance_inputs) + tuple(case_files.values()) + (model_weights,),
                 notes=("One or more fresh Julia subprocesses failed; inspect job_results.json.",),
             )
             names = ", ".join(result.name for result in failures)
@@ -1662,11 +2389,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     else:
         with source_logs(args, ARCHIVE_SECTION, output / "raw") as source:
             if args.mode == "archived":
-                paths = _archived_final_logs(source)
                 reported_panel_validation = _preserve_reported_figure_14_panels(
                     source, output
                 )
                 write_json(output / "reported_source_panels.json", reported_panel_validation)
+                parsed_specs, rows = _parse_archived_logs(source)
+                semantic_payload, archived_semantic_validation = (
+                    _archive_semantic_manifest(rows, archive=args.archive)
+                )
+                _write_archive_semantic_manifest(
+                    output / "archive_semantic_manifest.json", semantic_payload
+                )
+                write_json(
+                    output / "archive_semantic_validation.json",
+                    archived_semantic_validation,
+                )
             else:
                 # If parse points at an extracted copy of the original archive,
                 # use the same explicit final selection.  Otherwise parse the
@@ -1675,7 +2412,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     paths = _archived_final_logs(source)
                 except SystemExit:
                     paths = collect_logs(source)
-            parsed_specs, rows = _parse_logs(paths)
+                parsed_specs, rows = _parse_logs(paths)
         if args.mode == "parse":
             expected_specs = _parse_mode_expected_specs(parsed_specs)
 
@@ -1688,7 +2425,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "archived": "archived_reconstruction",
         "parse": "caller_supplied_parse_input",
         "smoke": "validation_only_subset",
-        "full": "fresh_paper_grid",
+        "full": "fresh_published_profile",
     }[args.mode]
     if experiment_profile["classification"] == "historical_reported_archive":
         publication_warning = (
@@ -1699,11 +2436,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         publication_warning = (
             "Smoke artifacts validate one documented subset and are not complete paper figures."
         )
-    else:
+    elif experiment_profile["classification"] == "caption_typo_parse_only":
         publication_warning = (
-            "This follows the manuscript-literal Figure 14 rho=1000 profile and is not "
-            "the historical rho=2000 profile that generated the published panels."
+            "This caller-supplied parse input uses the caption-typo rho=1000 profile; "
+            "the published Figure 14 data and fresh full rerun use rho=2000."
         )
+    else:
+        publication_warning = None
     write_json(
         output / "artifact_profile.json",
         {
@@ -1719,6 +2458,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         require_archived_statuses=args.mode == "archived",
         check_objectives=fresh or args.mode == "archived",
     )
+    if args.mode == "archived":
+        assert archived_semantic_validation is not None
+        validation["archive_semantic_validation"] = {
+            key: value
+            for key, value in archived_semantic_validation.items()
+            if key != "errors"
+        }
+        validation["errors"].extend(
+            f"Archive semantic manifest: {error}"
+            for error in archived_semantic_validation["errors"]
+        )
+        validation["status"] = "passed" if not validation["errors"] else "failed"
+    if args.mode == "full":
+        assert archive_validation is not None
+        raw_archive_comparison = _raw_archive_comparison(rows, archive_rows)
+        write_json(output / "archive_raw_comparison.json", raw_archive_comparison)
+        validation = _merge_raw_archive_validation(
+            validation,
+            archive_validation,
+            raw_archive_comparison,
+        )
     if reported_panel_validation is not None:
         validation["reported_source_panel_validation"] = reported_panel_validation
         if reported_panel_validation["status"] != "passed":
@@ -1785,7 +2545,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             (
                 "Reported Figure 14: case57, P=13:18, doubly linearized ADMM, rho=2000, retained folder case57_flip_2000, jobs 51523865-51523870."
                 if experiment_profile["classification"] == "historical_reported_archive"
-                else "Fresh manuscript-literal Figure 14: case57, P=13:18, doubly linearized ADMM, rho=1000."
+                else (
+                    "Caller-supplied caption-typo Figure 14 parse: case57, P=13:18, doubly linearized ADMM, rho=1000."
+                    if experiment_profile["classification"] == "caption_typo_parse_only"
+                    else "Fresh published-profile Figure 14: case57, P=13:18, doubly linearized ADMM, rho=2000."
+                )
             ),
             "The manuscript caption says rho=1000; the exact retained source panels and their data use rho=2000.",
             (
@@ -1794,7 +2558,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 else "Fresh/parse outputs remain separate from retained published source PNGs."
             ),
             "Fresh jobs use one Julia process per (case,P); BFS, MILP, and GNN share one METIS partition.",
-            "Archived reported rho=2000 and fresh manuscript-literal rho=1000 profiles are never merged.",
+            "Fresh full and archived artifacts are separately labeled even though both use the published rho=2000 profile.",
+            (
+                "Full mode compares all 162 fresh rows with the selected archive rows; exact iterations and statuses are enforced on the 159 non-censored rows, while all timings are informational."
+                if args.mode == "full"
+                else "The caption-typo rho=1000 profile is accepted only as optional parse input."
+            ),
             "The archived full sweep contains three valid time-limited method results at case1888rte/P=10.",
             "Reported archived partition+ADMM time is approximately 33.0 hours sequentially, excluding setup.",
         ),

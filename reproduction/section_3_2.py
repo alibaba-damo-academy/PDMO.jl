@@ -11,10 +11,15 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter, defaultdict
+import csv
+import hashlib
+import io
+import json
 from pathlib import Path
 import re
 import sys
 from typing import Mapping, Sequence
+import zipfile
 
 try:  # Support both ``python reproduction/section_3_2.py`` and module imports.
     from .common import (
@@ -63,9 +68,117 @@ JULIA_RUNNER = REPO_ROOT / "advanced" / "src" / "NetworkFlow" / "runNetworkFlowP
 PAPER_NODES = tuple(range(200, 601, 100))
 PAPER_SEEDS = tuple(range(1, 11))
 PAPER_ARCS = 2000
+PAPER_THREADS = 16
 METHODS = ("basic", "bfs", "milp")
 METHOD_LABELS = {"basic": "Basic", "bfs": "BFS", "milp": "MILP"}
 METHOD_COLORS = {"basic": "#2980b9", "bfs": "#f39c12", "milp": "#27ae60"}
+PAPER_SETTINGS: dict[str, object] = {
+    "solver": "original",
+    "maxIter": 100_000,
+    "initialRho": 1.0,
+    "timeLimit": 3600.0,
+    "logInterval": 1_000,
+}
+PAPER_RUN_KEYS = frozenset(
+    (nodes, seed, method)
+    for nodes in PAPER_NODES
+    for seed in PAPER_SEEDS
+    for method in METHODS
+)
+PAPER_CENSORED_KEY = (500, 6, "basic")
+ARCHIVE_RUNS_MEMBER = (
+    f"experiments_logs/{ARCHIVE_SECTION}/admm_summary/admm_runs.csv"
+)
+
+# Exact scheduler provenance of the five scale batches retained for Figure 11.
+# Tuple position is the paper seed (position 0 is seed 1).
+ARCHIVE_SCALE_JOBS: dict[int, tuple[str, tuple[int, ...]]] = {
+    200: ("40148228", tuple(range(50_464_369, 50_464_379))),
+    300: ("40148239", tuple(range(50_464_389, 50_464_399))),
+    400: ("40148240", tuple(range(50_464_399, 50_464_409))),
+    500: ("40148242", tuple(range(50_464_410, 50_464_420))),
+    600: ("40148264", tuple(range(50_464_441, 50_464_451))),
+}
+ARCHIVE_PAPER_JOBS: dict[tuple[int, int], tuple[str, int]] = {
+    (nodes, seed): (scale_folder, run_ids[seed - 1])
+    for nodes, (scale_folder, run_ids) in ARCHIVE_SCALE_JOBS.items()
+    for seed in PAPER_SEEDS
+}
+
+# Independent raw-result fingerprint from the retained Figure 11 jobs. Values
+# are ordered Basic/BFS/MILP. All statuses are optimal except PAPER_CENSORED_KEY.
+ARCHIVE_ITERATIONS: dict[tuple[int, int], tuple[int, int, int]] = {
+    (200, 1): (142, 11001, 8883),
+    (200, 2): (215, 15695, 15044),
+    (200, 3): (326, 22256, 17569),
+    (200, 4): (62, 13381, 22850),
+    (200, 5): (38, 14243, 11234),
+    (200, 6): (51, 41581, 41486),
+    (200, 7): (64, 11669, 10896),
+    (200, 8): (25, 20304, 17041),
+    (200, 9): (91, 19302, 12313),
+    (200, 10): (34, 29763, 19320),
+    (300, 1): (1380, 24467, 13672),
+    (300, 2): (59, 11881, 9569),
+    (300, 3): (2013, 16950, 14638),
+    (300, 4): (68, 26048, 17022),
+    (300, 5): (105, 13631, 11789),
+    (300, 6): (137, 12295, 12378),
+    (300, 7): (52, 21034, 14971),
+    (300, 8): (652, 27147, 15226),
+    (300, 9): (106, 10737, 11396),
+    (300, 10): (107, 24180, 22188),
+    (400, 1): (186, 28165, 14907),
+    (400, 2): (106, 9651, 6596),
+    (400, 3): (470, 10702, 7887),
+    (400, 4): (292, 14326, 8749),
+    (400, 5): (117, 19877, 13515),
+    (400, 6): (58, 15237, 13107),
+    (400, 7): (99, 13227, 9094),
+    (400, 8): (78, 16485, 12904),
+    (400, 9): (114, 20181, 21302),
+    (400, 10): (76, 14877, 11473),
+    (500, 1): (333, 28026, 20446),
+    (500, 2): (1364, 15251, 18706),
+    (500, 3): (248, 28405, 19291),
+    (500, 4): (196, 22751, 20601),
+    (500, 5): (86, 24194, 21659),
+    (500, 6): (3112, 18479, 14404),
+    (500, 7): (1772, 21387, 14961),
+    (500, 8): (282, 26350, 17159),
+    (500, 9): (465, 16473, 11463),
+    (500, 10): (142, 24848, 13819),
+    (600, 1): (68, 20834, 17374),
+    (600, 2): (244, 17458, 12771),
+    (600, 3): (1689, 46539, 14496),
+    (600, 4): (188, 17728, 16303),
+    (600, 5): (249, 12241, 11454),
+    (600, 6): (254, 20297, 14627),
+    (600, 7): (279, 17966, 17912),
+    (600, 8): (68, 24768, 12339),
+    (600, 9): (283, 16615, 12665),
+    (600, 10): (1768, 23999, 19314),
+}
+ARCHIVE_EXPECTED_OUTCOMES: dict[tuple[int, int, str], tuple[int, str]] = {
+    (nodes, seed, method): (
+        iterations[METHODS.index(method)],
+        (
+            "ADMM_TERMINATION_TIME_LIMIT"
+            if (nodes, seed, method) == PAPER_CENSORED_KEY
+            else "ADMM_TERMINATION_OPTIMAL"
+        ),
+    )
+    for (nodes, seed), iterations in ARCHIVE_ITERATIONS.items()
+    for method in METHODS
+}
+
+# SHA256 of the normalized 150-row semantic manifest produced by
+# _archive_semantic_manifest. This is intentionally a literal independent of
+# the supplied ZIP; changing a job mapping, command setting, outcome, or censor
+# identity changes the digest and rejects full mode before any output.
+ARCHIVE_SEMANTIC_SHA256 = (
+    "3672b09615fdc5c7044e8d37b57b165e02e52091310fa634e3198e1bbf285821"
+)
 
 VALID_STATUSES = {
     "ADMM_TERMINATION_OPTIMAL",
@@ -140,6 +253,18 @@ RUN_STARTS = (
 )
 RE_SEED = re.compile(r"^\s*seed\s*=\s*(\d+)\s*$")
 RE_INSTANCE = re.compile(r"Generating random instance(?: \(positional\))?:\s*nodes=(\d+)\s+arcs=(\d+)")
+RE_SOLVER_SETTING = re.compile(r"^\s*solver\s*=\s*([^\s]+)\s*$")
+RE_MAX_ITER_SETTING = re.compile(r"^\s*maxIter\s*=\s*(\d+)\s*$")
+RE_INITIAL_RHO_SETTING = re.compile(rf"^\s*initialRho\s*=\s*({NUMBER})\s*$")
+RE_TIME_LIMIT_SETTING = re.compile(rf"^\s*timeLimit\s*=\s*({NUMBER})\s*$")
+RE_LOG_INTERVAL_SETTING = re.compile(r"^\s*logInterval\s*=\s*(\d+)\s*$")
+SETTING_PATTERNS = (
+    ("solver", RE_SOLVER_SETTING, str),
+    ("maxIter", RE_MAX_ITER_SETTING, int),
+    ("initialRho", RE_INITIAL_RHO_SETTING, float),
+    ("timeLimit", RE_TIME_LIMIT_SETTING, float),
+    ("logInterval", RE_LOG_INTERVAL_SETTING, int),
+)
 RE_PARTITION = re.compile(
     rf"ADMMBipartiteGraph:\s*(BFS_BIPARTIZATION|MILP_BIPARTIZATION)\s+took\s+({NUMBER})\s+seconds"
 )
@@ -221,6 +346,9 @@ def parse_log(path: Path, source_log: str) -> tuple[list[dict[str, object]], dic
     seed: int | None = None
     nodes: int | None = None
     arcs: int | None = None
+    settings: dict[str, object | None] = {
+        setting: None for setting in PAPER_SETTINGS
+    }
     methods: list[dict[str, object]] = []
     current: dict[str, object] | None = None
     errors: list[str] = []
@@ -239,6 +367,19 @@ def parse_log(path: Path, source_log: str) -> tuple[list[dict[str, object]], dic
             match = RE_INSTANCE.search(line)
             if match:
                 nodes, arcs = int(match.group(1)), int(match.group(2))
+            for setting, pattern, convert in SETTING_PATTERNS:
+                match = pattern.match(line)
+                if match is None:
+                    continue
+                value = convert(match.group(1))
+                previous = settings[setting]
+                if previous is not None and previous != value:
+                    errors.append(
+                        f"{source_log}:{line_number}: conflicting {setting} echoes: "
+                        f"{previous!r} then {value!r}"
+                    )
+                settings[setting] = value
+                break
 
             if RE_DRIVER_FAILURE.search(line):
                 errors.append(f"{source_log}:{line_number}: driver reported: {line.strip()}")
@@ -388,7 +529,13 @@ def parse_log(path: Path, source_log: str) -> tuple[list[dict[str, object]], dic
             }
         )
 
-    metadata = {"source_log": source_log, "nodes": nodes, "arcs": arcs, "seed": seed}
+    metadata = {
+        "source_log": source_log,
+        "nodes": nodes,
+        "arcs": arcs,
+        "seed": seed,
+        **settings,
+    }
     if seed is None:
         errors.append(f"{source_log}: missing seed metadata")
     if nodes is None or arcs is None:
@@ -439,14 +586,47 @@ def validate_grid(
 ) -> tuple[dict[str, object], list[str]]:
     errors: list[str] = []
     pair_logs: defaultdict[tuple[int, int], list[str]] = defaultdict(list)
+    setting_logs: list[dict[str, object]] = []
+    setting_mismatch_count = 0
     for record in metadata:
+        source_log = str(record.get("source_log", "<unknown log>"))
+        observed_settings = {
+            setting: record.get(setting) for setting in PAPER_SETTINGS
+        }
+        setting_checks: list[dict[str, object]] = []
+        for setting, expected_value in PAPER_SETTINGS.items():
+            observed_value = observed_settings[setting]
+            exact = observed_value == expected_value
+            setting_checks.append(
+                {
+                    "setting": setting,
+                    "observed": observed_value,
+                    "expected": expected_value,
+                    "exact": exact,
+                }
+            )
+            if not exact:
+                setting_mismatch_count += 1
+                errors.append(
+                    f"{source_log}: expected echoed paper setting "
+                    f"{setting}={expected_value!r}, parsed {observed_value!r}"
+                )
+        setting_logs.append(
+            {
+                "source_log": source_log,
+                "observed": observed_settings,
+                "all_match": all(bool(check["exact"]) for check in setting_checks),
+                "checks": setting_checks,
+            }
+        )
+
         if record["nodes"] is None or record["seed"] is None:
             continue
         pair = (int(record["nodes"]), int(record["seed"]))
-        pair_logs[pair].append(str(record["source_log"]))
+        pair_logs[pair].append(source_log)
         if record["arcs"] != PAPER_ARCS:
             errors.append(
-                f"{record['source_log']}: expected {PAPER_ARCS} arcs, parsed {record['arcs']}"
+                f"{source_log}: expected {PAPER_ARCS} arcs, parsed {record['arcs']}"
             )
 
     duplicates = {pair: logs for pair, logs in pair_logs.items() if len(logs) != 1}
@@ -506,8 +686,797 @@ def validate_grid(
             {"nodes": nodes, "seed": seed, "logs": logs}
             for (nodes, seed), logs in sorted(duplicates.items())
         ],
+        "paper_settings": {
+            "expected": dict(PAPER_SETTINGS),
+            "checked_log_count": len(metadata),
+            "checked_value_count": len(metadata) * len(PAPER_SETTINGS),
+            "mismatch_count": setting_mismatch_count,
+            "all_match": bool(metadata) and setting_mismatch_count == 0,
+            "logs": setting_logs,
+        },
     }
     return report, errors
+
+
+def load_archive_runs(archive: Path) -> list[dict[str, object]]:
+    """Load the exact per-run Section 3.2 reference table from the archive."""
+
+    archive = archive.expanduser().resolve()
+    text: str
+    if archive.is_dir():
+        relative = Path(ARCHIVE_SECTION) / "admm_summary" / "admm_runs.csv"
+        candidates = (
+            archive / ARCHIVE_RUNS_MEMBER,
+            archive / relative,
+            archive / "experiments_logs" / relative,
+        )
+        csv_path = next((path for path in candidates if path.is_file()), None)
+        if csv_path is None:
+            matches = [
+                path
+                for path in archive.rglob("admm_runs.csv")
+                if tuple(path.parts[-len(relative.parts) :]) == tuple(relative.parts)
+                and "__MACOSX" not in path.parts
+            ]
+            if len(matches) != 1:
+                raise ValueError(
+                    f"expected one {relative.as_posix()} below {archive}, found {len(matches)}"
+                )
+            csv_path = matches[0]
+        text = csv_path.read_text(encoding="utf-8-sig")
+    elif archive.is_file():
+        try:
+            with zipfile.ZipFile(archive) as zipped:
+                suffix = tuple(Path(ARCHIVE_RUNS_MEMBER).parts)
+                matches = [
+                    name
+                    for name in zipped.namelist()
+                    if tuple(Path(name).parts[-len(suffix) :]) == suffix
+                    and "__MACOSX" not in Path(name).parts
+                ]
+                if len(matches) != 1:
+                    raise ValueError(
+                        f"expected one {ARCHIVE_RUNS_MEMBER} in {archive}, found {len(matches)}"
+                    )
+                text = zipped.read(matches[0]).decode("utf-8-sig")
+        except zipfile.BadZipFile as error:
+            raise ValueError(f"invalid archive ZIP {archive}: {error}") from error
+    else:
+        raise ValueError(f"archive reference does not exist: {archive}")
+
+    reader = csv.DictReader(io.StringIO(text))
+    required = {
+        "scale_folder",
+        "run_id",
+        "nodes",
+        "arcs",
+        "seed",
+        "method",
+        "partition_time_sec",
+        "init_time_sec",
+        "algorithm_time_sec",
+        "termination_status",
+        "iterations",
+        "stdout_log",
+    }
+    missing_columns = sorted(required.difference(reader.fieldnames or ()))
+    if missing_columns:
+        raise ValueError(
+            f"{ARCHIVE_RUNS_MEMBER} is missing columns: {missing_columns}"
+        )
+
+    rows: list[dict[str, object]] = []
+    for line_number, row in enumerate(reader, 2):
+        try:
+            partition = float(row["partition_time_sec"])
+            admm_time = float(row["algorithm_time_sec"])
+            scale_folder = row["scale_folder"].strip()
+            if not scale_folder:
+                raise ValueError("empty scale_folder")
+            method = row["method"].strip().lower()
+            if method not in METHODS:
+                raise ValueError(f"unknown method {method!r}")
+            rows.append(
+                {
+                    "scale_folder": scale_folder,
+                    "run_id": int(row["run_id"]),
+                    "nodes": int(row["nodes"]),
+                    "arcs": int(row["arcs"]),
+                    "seed": int(row["seed"]),
+                    "method": method,
+                    "partition_time_sec": partition,
+                    "initialization_time_sec": float(row["init_time_sec"]),
+                    "admm_time_sec": admm_time,
+                    "total_time_sec": partition + admm_time,
+                    "termination_status": row["termination_status"].strip(),
+                    "iterations": int(row["iterations"]),
+                    "stdout_log": row["stdout_log"].strip(),
+                }
+            )
+        except (AttributeError, KeyError, TypeError, ValueError) as error:
+            raise ValueError(
+                f"invalid {ARCHIVE_RUNS_MEMBER} row {line_number}: {error}"
+            ) from error
+    if not rows:
+        raise ValueError(f"{ARCHIVE_RUNS_MEMBER} contains no data rows")
+    return rows
+
+
+def _raw_key(row: Mapping[str, object]) -> tuple[int, int, str] | None:
+    try:
+        nodes = int(row["nodes"])
+        seed = int(row["seed"])
+        method = str(row["method"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not method:
+        return None
+    return nodes, seed, method
+
+
+def _raw_sort_key(key: tuple[int, int, str]) -> tuple[int, int, int, str]:
+    method = key[2]
+    method_index = METHODS.index(method) if method in METHODS else len(METHODS)
+    return key[0], key[1], method_index, method
+
+
+def _raw_text_key(key: tuple[int, int, str]) -> str:
+    return f"nodes={key[0]}/seed={key[1]}/{key[2]}"
+
+
+def _raw_index(
+    rows: Sequence[Mapping[str, object]],
+) -> tuple[
+    dict[tuple[int, int, str], Mapping[str, object]],
+    list[tuple[int, int, str]],
+    int,
+]:
+    index: dict[tuple[int, int, str], Mapping[str, object]] = {}
+    duplicates: list[tuple[int, int, str]] = []
+    missing_metadata = 0
+    for row in rows:
+        key = _raw_key(row)
+        if key is None:
+            missing_metadata += 1
+            continue
+        if key in index:
+            duplicates.append(key)
+            continue
+        index[key] = row
+    return index, sorted(set(duplicates), key=_raw_sort_key), missing_metadata
+
+
+def _raw_check(
+    checks: list[dict[str, object]],
+    *,
+    key: tuple[int, int, str],
+    field: str,
+    observed: object,
+    expected: object,
+    enforced: bool,
+    category: str,
+    reason: str,
+) -> None:
+    check: dict[str, object] = {
+        "key": _raw_text_key(key),
+        "nodes": key[0],
+        "seed": key[1],
+        "method": key[2],
+        "field": field,
+        "observed": observed,
+        "expected": expected,
+        "passed": observed == expected,
+        "enforced": enforced,
+        "category": category,
+        "reason": reason,
+    }
+    if field.endswith("_time_sec"):
+        try:
+            check["delta"] = float(observed) - float(expected)
+        except (TypeError, ValueError):
+            check["delta"] = None
+    checks.append(check)
+
+
+def build_raw_archive_comparison(
+    fresh_rows: Sequence[Mapping[str, object]],
+    archive_rows: Sequence[Mapping[str, object]],
+) -> dict[str, object]:
+    """Compare a fresh paper grid with the ZIP's 150 exact per-run rows."""
+
+    fresh_index, fresh_duplicates, fresh_missing_metadata = _raw_index(fresh_rows)
+    archive_index, archive_duplicates, archive_missing_metadata = _raw_index(
+        archive_rows
+    )
+    fresh_keys = set(fresh_index)
+    archive_keys = set(archive_index)
+    shared_keys = fresh_keys.intersection(archive_keys)
+    missing_fresh_keys = sorted(archive_keys.difference(fresh_keys), key=_raw_sort_key)
+    extra_fresh_keys = sorted(fresh_keys.difference(archive_keys), key=_raw_sort_key)
+    archive_missing_paper_keys = sorted(
+        PAPER_RUN_KEYS.difference(archive_keys), key=_raw_sort_key
+    )
+    archive_extra_keys = sorted(
+        archive_keys.difference(PAPER_RUN_KEYS), key=_raw_sort_key
+    )
+
+    checks: list[dict[str, object]] = []
+    censored_rows: list[dict[str, object]] = []
+    for key in sorted(shared_keys, key=_raw_sort_key):
+        fresh = fresh_index[key]
+        archived = archive_index[key]
+        censored = key == PAPER_CENSORED_KEY
+        _raw_check(
+            checks,
+            key=key,
+            field="arcs",
+            observed=fresh.get("arcs"),
+            expected=archived.get("arcs"),
+            enforced=True,
+            category="identity",
+            reason="the paper network-flow grid uses exactly 2000 arcs",
+        )
+        outcome_reason = (
+            "the archived paper run hit its 3600-second wall-time limit"
+            if censored
+            else "deterministic seeded ADMM outcome"
+        )
+        for field in ("iterations", "termination_status"):
+            _raw_check(
+                checks,
+                key=key,
+                field=field,
+                observed=fresh.get(field),
+                expected=archived.get(field),
+                enforced=not censored,
+                category="outcome_censored" if censored else "outcome",
+                reason=outcome_reason,
+            )
+        for field in (
+            "partition_time_sec",
+            "initialization_time_sec",
+            "admm_time_sec",
+            "total_time_sec",
+        ):
+            _raw_check(
+                checks,
+                key=key,
+                field=field,
+                observed=fresh.get(field),
+                expected=archived.get(field),
+                enforced=False,
+                category="timing_informational",
+                reason="wall-clock measurement is hardware-dependent",
+            )
+        if censored:
+            censored_rows.append(
+                {
+                    "key": _raw_text_key(key),
+                    "nodes": key[0],
+                    "seed": key[1],
+                    "method": key[2],
+                    "archive_status": archived.get("termination_status"),
+                    "observed_status": fresh.get("termination_status"),
+                    "reason": "archive_time_limit",
+                    "outcome_enforced": False,
+                }
+            )
+
+    archive_time_limit_keys = sorted(
+        (
+            key
+            for key, row in archive_index.items()
+            if row.get("termination_status") == "ADMM_TERMINATION_TIME_LIMIT"
+        ),
+        key=_raw_sort_key,
+    )
+    unexpected_archive_time_limit_keys = [
+        key for key in archive_time_limit_keys if key != PAPER_CENSORED_KEY
+    ]
+    archive_wrong_arcs = [
+        {
+            "key": _raw_text_key(key),
+            "observed": row.get("arcs"),
+            "expected": PAPER_ARCS,
+        }
+        for key, row in sorted(archive_index.items(), key=lambda item: _raw_sort_key(item[0]))
+        if row.get("arcs") != PAPER_ARCS
+    ]
+    archived_censored = archive_index.get(PAPER_CENSORED_KEY)
+    censored_archive_status_valid = bool(archived_censored) and (
+        archived_censored.get("termination_status")
+        == "ADMM_TERMINATION_TIME_LIMIT"
+    )
+
+    enforced_checks = [check for check in checks if bool(check["enforced"])]
+    enforced_failed = sum(not bool(check["passed"]) for check in enforced_checks)
+    key_integrity_valid = not any(
+        (
+            fresh_duplicates,
+            archive_duplicates,
+            fresh_missing_metadata,
+            archive_missing_metadata,
+            missing_fresh_keys,
+            extra_fresh_keys,
+            archive_missing_paper_keys,
+            archive_extra_keys,
+            archive_wrong_arcs,
+        )
+    )
+    enforced_outcome_checks = [
+        check for check in enforced_checks if check["category"] == "outcome"
+    ]
+    enforced_identity_checks = [
+        check for check in enforced_checks if check["category"] == "identity"
+    ]
+    return {
+        "reference": f"experiments_logs.zip/{ARCHIVE_RUNS_MEMBER}",
+        "policy": {
+            "keys": "exact 150-row (nodes, seed, method) paper grid",
+            "iterations_and_status": (
+                "exact on 149 deterministic rows; informational only for "
+                "nodes=500/seed=6/basic because the archived run hit its time limit"
+            ),
+            "timings": "informational only",
+        },
+        "fresh_record_count": len(fresh_rows),
+        "archive_record_count": len(archive_rows),
+        "expected_paper_record_count": len(PAPER_RUN_KEYS),
+        "compared_key_count": len(shared_keys),
+        "fresh_missing_metadata_count": fresh_missing_metadata,
+        "archive_missing_metadata_count": archive_missing_metadata,
+        "fresh_duplicates": [list(key) for key in fresh_duplicates],
+        "archive_duplicates": [list(key) for key in archive_duplicates],
+        "missing_fresh_keys": [list(key) for key in missing_fresh_keys],
+        "extra_fresh_keys": [list(key) for key in extra_fresh_keys],
+        "archive_missing_paper_keys": [
+            list(key) for key in archive_missing_paper_keys
+        ],
+        "archive_extra_keys": [list(key) for key in archive_extra_keys],
+        "archive_wrong_arcs": archive_wrong_arcs,
+        "archive_time_limit_keys": [list(key) for key in archive_time_limit_keys],
+        "unexpected_archive_time_limit_keys": [
+            list(key) for key in unexpected_archive_time_limit_keys
+        ],
+        "censored_archive_status_valid": censored_archive_status_valid,
+        "censored_rows": censored_rows,
+        "checks": checks,
+        "summary": {
+            "expected_keys": len(PAPER_RUN_KEYS),
+            "compared_keys": len(shared_keys),
+            "stable_outcome_rows": sum(
+                key != PAPER_CENSORED_KEY for key in shared_keys
+            ),
+            "censored_row_count": len(censored_rows),
+            "enforced": len(enforced_checks),
+            "enforced_identity_checks": len(enforced_identity_checks),
+            "enforced_outcome_checks": len(enforced_outcome_checks),
+            "enforced_passed": len(enforced_checks) - enforced_failed,
+            "enforced_failed": enforced_failed,
+            "all_enforced_checks_passed": enforced_failed == 0,
+            "key_integrity_valid": key_integrity_valid,
+            "all_required_checks_passed": (
+                key_integrity_valid
+                and censored_archive_status_valid
+                and not unexpected_archive_time_limit_keys
+                and enforced_failed == 0
+            ),
+        },
+    }
+
+
+def raw_archive_validation_errors(comparison: Mapping[str, object]) -> list[str]:
+    errors: list[str] = []
+    for count_field, label in (
+        ("fresh_missing_metadata_count", "fresh rows missing key metadata"),
+        ("archive_missing_metadata_count", "archive rows missing key metadata"),
+    ):
+        count = int(comparison.get(count_field) or 0)
+        if count:
+            errors.append(f"Raw archive comparison has {count} {label}")
+    for list_field, label in (
+        ("fresh_duplicates", "duplicate fresh keys"),
+        ("archive_duplicates", "duplicate archive keys"),
+        ("missing_fresh_keys", "archive keys missing from fresh full grid"),
+        ("extra_fresh_keys", "fresh keys absent from the archive"),
+        ("archive_missing_paper_keys", "paper keys missing from archive reference"),
+        ("archive_extra_keys", "non-paper keys in archive reference"),
+        ("archive_wrong_arcs", "archive rows whose arcs value is not 2000"),
+        ("unexpected_archive_time_limit_keys", "unexpected archived time-limit rows"),
+    ):
+        values = comparison.get(list_field)
+        if isinstance(values, list) and values:
+            errors.append(
+                f"Raw archive comparison found {len(values)} {label}; first={values[:5]}"
+            )
+    if not bool(comparison.get("censored_archive_status_valid")):
+        errors.append(
+            "Raw archive comparison expected nodes=500/seed=6/basic to be the "
+            "archived ADMM time-limit row"
+        )
+
+    checks = comparison.get("checks")
+    if not isinstance(checks, list):
+        return [*errors, "Raw archive comparison did not produce a check list"]
+    failed = [
+        check
+        for check in checks
+        if isinstance(check, Mapping)
+        and bool(check.get("enforced"))
+        and not bool(check.get("passed"))
+    ]
+    errors.extend(
+        "Raw archive mismatch "
+        f"{check.get('key')}/{check.get('field')}: expected "
+        f"{check.get('expected')!r}, got {check.get('observed')!r}"
+        for check in failed
+    )
+    return errors
+
+
+def _expected_archive_command_tokens(nodes: int, seed: int) -> tuple[str, ...]:
+    return (
+        "./julia/run.sh",
+        "-t",
+        str(PAPER_THREADS),
+        "PDMO.jl/advanced/src/NetworkFlow/runNetworkFlowProblem.jl",
+        "--solver",
+        str(PAPER_SETTINGS["solver"]),
+        "--maxIter",
+        str(PAPER_SETTINGS["maxIter"]),
+        "--initialRho",
+        str(PAPER_SETTINGS["initialRho"]),
+        "--timeLimit",
+        str(PAPER_SETTINGS["timeLimit"]),
+        "--seed",
+        str(seed),
+        "--logInterval",
+        str(PAPER_SETTINGS["logInterval"]),
+        "--random",
+        str(nodes),
+        str(PAPER_ARCS),
+    )
+
+
+def _archive_section_root(archive: Path) -> Path:
+    candidates = (
+        archive / "experiments_logs" / ARCHIVE_SECTION,
+        archive / ARCHIVE_SECTION,
+        archive,
+    )
+    for candidate in candidates:
+        if (
+            candidate.name == ARCHIVE_SECTION
+            and (candidate / "admm_summary" / "admm_runs.csv").is_file()
+        ):
+            return candidate
+    matches = sorted(
+        {
+            path.parent.parent.resolve()
+            for path in archive.rglob("admm_runs.csv")
+            if path.parent.name == "admm_summary"
+            and path.parent.parent.name == ARCHIVE_SECTION
+            and "__MACOSX" not in path.parts
+        }
+    )
+    if len(matches) != 1:
+        raise ValueError(
+            f"expected one extracted {ARCHIVE_SECTION} directory below "
+            f"{archive}, found {len(matches)}"
+        )
+    return matches[0]
+
+
+def _archive_job_sources(
+    archive: Path,
+) -> tuple[
+    dict[tuple[str, int], str],
+    set[tuple[str, int]],
+    set[tuple[str, int]],
+    list[str],
+]:
+    """Read exact scheduler command membership without extracting the ZIP."""
+
+    archive = archive.expanduser().resolve()
+    commands: dict[tuple[str, int], str] = {}
+    command_jobs: set[tuple[str, int]] = set()
+    stdout_jobs: set[tuple[str, int]] = set()
+    errors: list[str] = []
+
+    def record(
+        *,
+        parts: tuple[str, ...],
+        leaf: str,
+        command_text: str | None,
+        source: str,
+    ) -> None:
+        try:
+            section_index = parts.index(ARCHIVE_SECTION)
+        except ValueError:
+            return
+        remainder = parts[section_index + 1 :]
+        if len(remainder) != 3 or remainder[2] != leaf:
+            return
+        scale_folder, run_text, _ = remainder
+        if not scale_folder.isdigit() or not run_text.isdigit():
+            return
+        job = (scale_folder, int(run_text))
+        target = command_jobs if leaf == "cmd" else stdout_jobs
+        if job in target:
+            errors.append(f"duplicate archive member for {job[0]}/{job[1]}/{leaf}")
+            return
+        target.add(job)
+        if command_text is not None:
+            commands[job] = command_text
+
+    if archive.is_dir():
+        section_root = _archive_section_root(archive)
+        for scale_dir in sorted(section_root.iterdir()):
+            if not scale_dir.is_dir() or not scale_dir.name.isdigit():
+                continue
+            for run_dir in sorted(scale_dir.iterdir()):
+                if not run_dir.is_dir() or not run_dir.name.isdigit():
+                    continue
+                for leaf in ("cmd", "stdout.log"):
+                    path = run_dir / leaf
+                    if not path.is_file():
+                        continue
+                    record(
+                        parts=tuple(path.parts),
+                        leaf=leaf,
+                        command_text=(
+                            path.read_text(encoding="utf-8", errors="ignore")
+                            if leaf == "cmd"
+                            else None
+                        ),
+                        source=str(path),
+                    )
+    elif archive.is_file():
+        try:
+            with zipfile.ZipFile(archive) as zipped:
+                for name in zipped.namelist():
+                    parts = tuple(Path(name).parts)
+                    if "__MACOSX" in parts or not parts:
+                        continue
+                    leaf = parts[-1]
+                    if leaf not in {"cmd", "stdout.log"}:
+                        continue
+                    record(
+                        parts=parts,
+                        leaf=leaf,
+                        command_text=(
+                            zipped.read(name).decode("utf-8", errors="ignore")
+                            if leaf == "cmd"
+                            else None
+                        ),
+                        source=name,
+                    )
+        except zipfile.BadZipFile as error:
+            raise ValueError(f"invalid archive ZIP {archive}: {error}") from error
+    else:
+        raise ValueError(f"archive reference does not exist: {archive}")
+    return commands, command_jobs, stdout_jobs, errors
+
+
+def _archive_command_config(
+    command: str, *, nodes: int, seed: int, source: str
+) -> tuple[dict[str, object] | None, list[str]]:
+    tokens = tuple(command.split())
+    expected = _expected_archive_command_tokens(nodes, seed)
+    if tokens != expected:
+        return None, [
+            f"{source}: archived command mismatch for nodes={nodes}, seed={seed}; "
+            f"expected {' '.join(expected)!r}, got {' '.join(tokens)!r}"
+        ]
+    return (
+        {
+            "runner": tokens[3],
+            "threads": int(tokens[2]),
+            "solver": tokens[5],
+            "maxIter": int(tokens[7]),
+            "initialRho": float(tokens[9]),
+            "timeLimit": float(tokens[11]),
+            "logInterval": int(tokens[15]),
+        },
+        [],
+    )
+
+
+def _archive_semantic_manifest(
+    rows: Sequence[Mapping[str, object]],
+    command_configs: Mapping[tuple[str, int], Mapping[str, object]],
+) -> list[dict[str, object]]:
+    manifest: list[dict[str, object]] = []
+    for row in sorted(
+        rows,
+        key=lambda item: _raw_sort_key(
+            (int(item["nodes"]), int(item["seed"]), str(item["method"]))
+        ),
+    ):
+        nodes = int(row["nodes"])
+        seed = int(row["seed"])
+        method = str(row["method"])
+        scale_folder = str(row["scale_folder"])
+        run_id = int(row["run_id"])
+        config = command_configs[(scale_folder, run_id)]
+        manifest.append(
+            {
+                "scale_folder": scale_folder,
+                "run_id": run_id,
+                "nodes": nodes,
+                "arcs": int(row["arcs"]),
+                "seed": seed,
+                "method": method,
+                "runner": str(config["runner"]),
+                "threads": int(config["threads"]),
+                "solver": str(config["solver"]),
+                "maxIter": int(config["maxIter"]),
+                "initialRho": float(config["initialRho"]),
+                "timeLimit": float(config["timeLimit"]),
+                "logInterval": int(config["logInterval"]),
+                "iterations": int(row["iterations"]),
+                "termination_status": str(row["termination_status"]),
+                "censored": (nodes, seed, method) == PAPER_CENSORED_KEY,
+            }
+        )
+    return manifest
+
+
+def _archive_semantic_digest(manifest: Sequence[Mapping[str, object]]) -> str:
+    encoded = json.dumps(
+        list(manifest), sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _archive_reference_errors(
+    rows: Sequence[Mapping[str, object]], archive: Path
+) -> list[str]:
+    errors: list[str] = []
+    index, duplicates, missing_metadata = _raw_index(rows)
+    if missing_metadata:
+        errors.append(f"{missing_metadata} archive rows lack nodes/seed/method metadata")
+    if duplicates:
+        errors.append(f"duplicate archive result keys: {duplicates[:5]}")
+    missing_keys = sorted(PAPER_RUN_KEYS.difference(index), key=_raw_sort_key)
+    extra_keys = sorted(set(index).difference(PAPER_RUN_KEYS), key=_raw_sort_key)
+    if missing_keys:
+        errors.append(f"archive is missing paper result keys: {missing_keys[:5]}")
+    if extra_keys:
+        errors.append(f"archive contains non-paper result keys: {extra_keys[:5]}")
+
+    for key, row in sorted(index.items(), key=lambda item: _raw_sort_key(item[0])):
+        nodes, seed, method = key
+        expected_job = ARCHIVE_PAPER_JOBS.get((nodes, seed))
+        observed_job = (str(row.get("scale_folder")), row.get("run_id"))
+        if expected_job is None or observed_job != expected_job:
+            errors.append(
+                f"archive job mapping mismatch for nodes={nodes}, seed={seed}: "
+                f"expected {expected_job}, got {observed_job}"
+            )
+        if row.get("arcs") != PAPER_ARCS:
+            errors.append(
+                f"archive arcs mismatch for nodes={nodes}, seed={seed}, "
+                f"method={method}: expected {PAPER_ARCS}, got {row.get('arcs')!r}"
+            )
+        expected_outcome = ARCHIVE_EXPECTED_OUTCOMES.get(key)
+        observed_outcome = (row.get("iterations"), row.get("termination_status"))
+        if expected_outcome is None or observed_outcome != expected_outcome:
+            errors.append(
+                f"archive outcome mismatch for nodes={nodes}, seed={seed}, "
+                f"method={method}: expected {expected_outcome}, "
+                f"got {observed_outcome}"
+            )
+        if expected_job is not None:
+            expected_suffix = (
+                expected_job[0],
+                str(expected_job[1]),
+                "stdout.log",
+            )
+            observed_path = tuple(Path(str(row.get("stdout_log", ""))).parts[-3:])
+            if observed_path != expected_suffix:
+                errors.append(
+                    f"archive stdout_log mismatch for nodes={nodes}, seed={seed}, "
+                    f"method={method}: expected suffix {expected_suffix}, "
+                    f"got {observed_path}"
+                )
+
+    commands, command_jobs, stdout_jobs, source_errors = _archive_job_sources(archive)
+    errors.extend(source_errors)
+    expected_jobs = set(ARCHIVE_PAPER_JOBS.values())
+    for label, observed_jobs in (
+        ("cmd", command_jobs),
+        ("stdout.log", stdout_jobs),
+    ):
+        missing_jobs = sorted(expected_jobs.difference(observed_jobs))
+        extra_jobs = sorted(observed_jobs.difference(expected_jobs))
+        if missing_jobs:
+            errors.append(f"archive is missing {label} jobs: {missing_jobs[:5]}")
+        if extra_jobs:
+            errors.append(f"archive has unexpected {label} jobs: {extra_jobs[:5]}")
+
+    command_configs: dict[tuple[str, int], Mapping[str, object]] = {}
+    for (nodes, seed), job in sorted(ARCHIVE_PAPER_JOBS.items()):
+        command = commands.get(job)
+        if command is None:
+            continue
+        config, command_errors = _archive_command_config(
+            command,
+            nodes=nodes,
+            seed=seed,
+            source=f"{job[0]}/{job[1]}/cmd",
+        )
+        errors.extend(command_errors)
+        if config is not None:
+            command_configs[job] = config
+
+    if (
+        not missing_metadata
+        and not duplicates
+        and not missing_keys
+        and not extra_keys
+        and len(command_configs) == len(ARCHIVE_PAPER_JOBS)
+    ):
+        manifest = _archive_semantic_manifest(rows, command_configs)
+        digest = _archive_semantic_digest(manifest)
+        if digest != ARCHIVE_SEMANTIC_SHA256:
+            errors.append(
+                "archive semantic manifest SHA256 mismatch: "
+                f"expected {ARCHIVE_SEMANTIC_SHA256}, got {digest}"
+            )
+    return errors
+
+
+def load_validated_archive_runs(archive: Path) -> list[dict[str, object]]:
+    """Load and independently validate the exact Section 3.2 paper archive."""
+
+    rows = load_archive_runs(archive)
+    errors = _archive_reference_errors(rows, archive)
+    if errors:
+        details = "\n".join(f"  - {error}" for error in errors)
+        raise ValueError("invalid Section 3.2 raw archive reference:\n" + details)
+    return rows
+
+
+def requires_raw_archive_comparison(
+    mode: str,
+    rows: Sequence[Mapping[str, object]],
+    metadata: Sequence[Mapping[str, object]] = (),
+) -> bool:
+    """Apply raw references to full mode and 50-job full-grid parse inputs."""
+
+    if mode == "full":
+        return True
+    if mode != "parse":
+        return False
+    pair_source = metadata if metadata else rows
+    observed_pairs: set[tuple[int, int]] = set()
+    for record in pair_source:
+        try:
+            observed_pairs.add((int(record["nodes"]), int(record["seed"])))
+        except (KeyError, TypeError, ValueError):
+            continue
+    paper_pairs = {
+        (nodes, seed) for nodes in PAPER_NODES for seed in PAPER_SEEDS
+    }
+    return observed_pairs == paper_pairs
+
+
+def provenance_inputs(
+    args: argparse.Namespace, raw_reference_required: bool
+) -> list[Path]:
+    """Return every input whose content contributed to the output artifacts."""
+
+    if args.mode == "archived":
+        return [args.archive]
+    if args.mode == "parse":
+        inputs = [args.logs]
+        if raw_reference_required:
+            inputs.append(args.archive)
+        return inputs
+    if args.mode == "full":
+        return [JULIA_RUNNER, args.archive]
+    return [JULIA_RUNNER]
 
 
 def _numeric(rows: Sequence[Mapping[str, object]], field: str) -> list[float]:
@@ -917,6 +1886,19 @@ def _job_result_payload(results) -> list[dict[str, object]]:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     validate_common_arguments(args)
+    preflight_archive_rows: list[dict[str, object]] | None = None
+    if args.mode == "full":
+        if args.threads != PAPER_THREADS:
+            raise SystemExit(
+                f"Section 3.2 full mode requires --threads {PAPER_THREADS} "
+                "to match the paper experiment."
+            )
+        try:
+            preflight_archive_rows = load_validated_archive_runs(args.archive)
+        except (OSError, ValueError) as error:
+            raise SystemExit(
+                f"Full mode requires a valid experiments_logs.zip raw reference: {error}"
+            ) from error
     output = prepare_mode_output(args.output, args.mode)
     jobs: list[Job] = []
     results = []
@@ -961,7 +1943,65 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     comparison, comparison_errors = compare_reference(summaries, args.mode, rows)
     errors.extend(comparison_errors)
+    raw_reference_required = requires_raw_archive_comparison(
+        args.mode, rows, metadata
+    )
+    raw_reference_errors: list[str] = []
+    raw_reference_report: dict[str, object]
+    if raw_reference_required:
+        try:
+            archive_rows = (
+                preflight_archive_rows
+                if preflight_archive_rows is not None
+                else load_validated_archive_runs(args.archive)
+            )
+            raw_reference_report = build_raw_archive_comparison(rows, archive_rows)
+            raw_reference_report["applied"] = True
+            raw_reference_report["archive_path"] = str(
+                args.archive.expanduser().resolve()
+            )
+            raw_reference_errors = raw_archive_validation_errors(raw_reference_report)
+            raw_reference_report["validation_errors"] = list(raw_reference_errors)
+            errors.extend(raw_reference_errors)
+            comparison["iteration_policy"] = (
+                "exact raw archive iteration/status check on 149 stable rows; "
+                "nodes=500/seed=6/basic is time-limit-censored and informational"
+            )
+        except (OSError, ValueError) as error:
+            message = f"could not load Section 3.2 raw archive reference: {error}"
+            errors.append(message)
+            raw_reference_errors.append(message)
+            raw_reference_report = {
+                "applied": False,
+                "reference": f"experiments_logs.zip/{ARCHIVE_RUNS_MEMBER}",
+                "archive_path": str(args.archive.expanduser().resolve()),
+                "load_error": str(error),
+                "validation_errors": [message],
+            }
+    else:
+        raw_reference_report = {
+            "applied": False,
+            "reference": f"experiments_logs.zip/{ARCHIVE_RUNS_MEMBER}",
+            "reason": (
+                "raw comparison applies only to full mode or parse mode containing "
+                "the exact 50-job paper grid"
+            ),
+            "validation_errors": [],
+        }
+    if raw_reference_required:
+        write_json(output / "raw_archive_comparison.json", raw_reference_report)
+    comparison["paper_settings_validation"] = grid_report["paper_settings"]
+    comparison["raw_archive_comparison"] = raw_reference_report
     write_json(output / "reference_comparison.json", comparison)
+
+    grid_report["raw_archive_reference"] = {
+        "required": raw_reference_required,
+        "applied": bool(raw_reference_report.get("applied")),
+        "reference": raw_reference_report.get("reference"),
+        "summary": raw_reference_report.get("summary"),
+        "error_count": len(raw_reference_errors),
+        "errors": raw_reference_errors,
+    }
 
     figures: list[Path] = []
     if not args.no_plots and summaries and not errors:
@@ -975,13 +2015,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     grid_report["valid"] = not errors
     write_json(output / "validation.json", grid_report)
 
-    inputs: list[Path]
-    if args.mode == "archived":
-        inputs = [args.archive]
-    elif args.mode == "parse":
-        inputs = [args.logs]
-    else:
-        inputs = [JULIA_RUNNER]
+    inputs = provenance_inputs(args, raw_reference_required)
     write_provenance(
         output,
         section="3.2 Linear Program: The Network Flow Problem / Figure 11",

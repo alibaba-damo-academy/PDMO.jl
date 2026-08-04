@@ -53,7 +53,7 @@ REPORTED_SOURCE_FILES = {
     "GenericLP.jl": REPORTED_GENERIC_LP_SOURCE,
 }
 REPORTED_SOURCE_SHA256 = {
-    "enlight_hard_demo.jl": "c35c33d3ee5fae25cd6824eb0ff2b3fdecf7a2f2adfa6b99d0bb8615f4996384",
+    "enlight_hard_demo.jl": "c93948a9dd627b4985eb88d3a6d6a7234297b8f50a1b82988b055f20a28be1f6",
     "inspect_cocluster.jl": "af43735b56e7c635af9608c320e544deb8481932a900ca06d1bf48fb1edeae38",
     "GenericLP.jl": "199ec11f9fa2f69184f62971090a860ab2dae3cc7262e9cc42437a536c5cf5c1",
 }
@@ -155,6 +155,11 @@ _SOURCE_CHECKS = (
         "co-clustering local seed",
         "inspect_cocluster.jl",
         r"MersenneTwister\(\s*42\s*\)",
+    ),
+    (
+        "canonical MILP bipartition rendering orientation",
+        "enlight_hard_demo.jl",
+        r"left_anchor\s*=\s*\"VariableNode\(x_1\)\"",
     ),
 )
 

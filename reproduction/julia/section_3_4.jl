@@ -90,12 +90,15 @@ function run_and_record!(
     thunk::Function,
 )
     try
+        flush(stdout)
         push!(results, (label, thunk()))
     catch err
         push!(failures, label)
         @error "Section 3.4 method failed" method=label exception=(err, catch_backtrace())
     end
+    flush(stderr)
     println("="^60)
+    flush(stdout)
     return nothing
 end
 

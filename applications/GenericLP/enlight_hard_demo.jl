@@ -336,9 +336,16 @@ function _plot_original_cocluster_graph(mbp::MultiblockProblem, outfile::String)
     println("[info] saved graph -> $(outfile)")
 end
 
-function _plot_admm_bipartized_graph(admm_graph::ADMMBipartiteGraph, outfile::String, title_text::String)
+function _plot_admm_bipartized_graph(admm_graph::ADMMBipartiteGraph, outfile::String, title_text::String; left_anchor::Union{Nothing,String}=nothing)
     left_nodes = sort(copy(admm_graph.left))
     right_nodes = sort(copy(admm_graph.right))
+
+    # A bipartition and its global left/right complement are the same solution.
+    # Apply an explicit visualization-only anchor when solver tie-breaking may
+    # otherwise mirror an identical published graph.
+    if left_anchor !== nothing && left_anchor in right_nodes
+        left_nodes, right_nodes = right_nodes, left_nodes
+    end
     pos = _bipartite_positions(left_nodes, right_nodes)
 
     fig, ax = subplots(figsize=(6.6, 4.2))
@@ -421,7 +428,12 @@ if abspath(PROGRAM_FILE) == @__FILE__
 
     graph_for_milp = MultiblockGraph(mbp_graph)
     admm_graph_milp = ADMMBipartiteGraph(graph_for_milp, mbp_graph, MILP_BIPARTIZATION, 1)
-    _plot_admm_bipartized_graph(admm_graph_milp, joinpath(outdir, "graph_bipartization_milp.png"), "Bipartization Graph (MILP)")
+    _plot_admm_bipartized_graph(
+        admm_graph_milp,
+        joinpath(outdir, "graph_bipartization_milp.png"),
+        "Bipartization Graph (MILP)";
+        left_anchor="VariableNode(x_1)",
+    )
 
     graph_for_bfs = MultiblockGraph(mbp_graph)
     admm_graph_bfs = ADMMBipartiteGraph(graph_for_bfs, mbp_graph, BFS_BIPARTIZATION, 1)
