@@ -68,20 +68,29 @@ def add_common_arguments(
     """Add the common execution and artifact arguments to a section CLI."""
 
     modes = ("archived", "parse", "smoke", "full", *extra_modes)
+    mode_help = (
+        "archived: rebuild from experiments_logs.zip; parse: rebuild from "
+        "--logs; smoke/full: execute a bounded/complete fresh sweep"
+    )
+    if "reported" in extra_modes:
+        mode_help += (
+            "; reported: rerun and pixel-validate the historical submitted panels"
+        )
     parser.add_argument(
         "--mode",
         choices=modes,
         default="archived",
-        help=(
-            "archived: rebuild from experiments_logs.zip; parse: rebuild "
-            "from --logs; smoke/full: execute a bounded/full fresh sweep"
-        ),
+        help=mode_help,
     )
     parser.add_argument(
         "--archive",
         type=Path,
         default=DEFAULT_ARCHIVE,
-        help="Path to experiments_logs.zip or an extracted experiments_logs directory.",
+        help=(
+            "Path to experiments_logs.zip or an extracted experiments_logs "
+            "directory; required by archived mode and optional for stronger "
+            "full-mode comparison"
+        ),
     )
     parser.add_argument(
         "--logs",

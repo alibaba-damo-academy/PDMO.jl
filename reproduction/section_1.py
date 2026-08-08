@@ -136,7 +136,7 @@ def _plot(rows: list[dict[str, object]], output: Path) -> None:
         pyplot.close(figure)
 
 
-def main() -> int:
+def _legacy_main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     add_common_arguments(parser, default_output=REPRODUCTION_ROOT / "output" / "section_1")
     parser.set_defaults(mode="full")
@@ -203,10 +203,16 @@ def main() -> int:
     return 0
 
 
-if __name__ == "__main__":
+def main(argv=None) -> int:
+    """Dispatch imports and script execution to the strict reviewer CLI."""
+
     try:
         from .section_1_impl import main as strict_main
     except ImportError:
         from section_1_impl import main as strict_main
-    raise SystemExit(strict_main())
+    return strict_main(argv)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
 

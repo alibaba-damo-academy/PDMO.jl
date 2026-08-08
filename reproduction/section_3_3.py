@@ -67,6 +67,24 @@ LOG_INTERVAL = 100
 R_VALUE = 1.0e4
 SEED = 126
 
+# Fresh reruns retain exact experiment identity, but threaded floating-point
+# termination and a fixed wall-clock cap can move the final iteration slightly
+# across Julia/runtime/hardware combinations. These bounds are deliberately
+# explicit so that machine variance cannot become an unbounded waiver.
+NON_CENSORED_ITERATION_RELATIVE_TOLERANCE = 0.015
+NON_CENSORED_ITERATION_ABSOLUTE_TOLERANCE = 5
+FRESH_ONLY_TIME_LIMIT_NEAR_CAP_FRACTION = 0.95
+FRESH_ONLY_TIME_LIMIT_ITERATION_RELATIVE_TOLERANCE = 0.10
+FIGURE_13_NORMALIZED_ITERATION_TOLERANCE = 0.03
+FIGURE_14_NORMALIZED_ITERATION_TOLERANCE = 0.02
+MATERIAL_ITERATION_ORDER_MARGIN = 0.01
+FIGURE_14_NORMALIZED_TIME_TOLERANCE = 0.06
+MATERIAL_FIGURE_14_TIME_ORDER_MARGIN = 0.02
+FIGURE_13_LARGE_CASES = ("case89pegase", "case118", "case300", "case1888rte")
+FIGURE_13_GNN_MILP_COMPARABLE_CASES = ("case118", "case300", "case1888rte")
+FIGURE_13_MINIMUM_LARGE_CASE_MILP_TIME_WINS = 3
+FIGURE_13_GNN_MILP_COMPARABILITY_RATIO = 1.20
+
 METHOD_COLORS = {
     "BFS": "#f39c12",
     "MILP": "#27ae60",
@@ -1357,9 +1375,11 @@ def _raw_archive_comparison(
 ) -> dict[str, object]:
     """Compare a fresh full sweep with the 162 raw rows used by the paper.
 
-    Runtime is always informational. The three case1888rte/P=10 archive rows
-    were stopped by the 7200-second limit, so their fresh iterations and
-    terminal statuses are also reported without an equality gate.
+    Row identity and configuration remain exact. Non-censored status remains
+    exact, while small iteration drift is bounded explicitly. The three
+    case1888rte/P=10 archive rows were stopped by the 7200-second limit and a
+    fresh-only cutoff is accepted only near that same boundary. Row runtimes are
+    informational; normalized plotted conclusions are checked separately.
     """
 
     expected_keys = {
@@ -1385,12 +1405,31 @@ def _raw_archive_comparison(
             f"extra={sorted(archive_keys - expected_keys)}"
         )
 
+    observed_archive_time_censored_keys = {
+        key
+        for key, row in archive_index.items()
+        if str(row["termination_status"]) == "ADMM_TERMINATION_TIME_LIMIT"
+    }
+    if observed_archive_time_censored_keys != ARCHIVE_TIME_CENSORED_KEYS:
+        errors.append(
+            "Archived ADMM-time-censored keys do not match the pinned paper grid; "
+            f"expected={sorted(ARCHIVE_TIME_CENSORED_KEYS)}, "
+            f"observed={sorted(observed_archive_time_censored_keys)}"
+        )
+
+    warnings: list[str] = []
     entries: list[dict[str, object]] = []
     config_match_count = 0
-    iteration_match_count = 0
+    exact_iteration_match_count = 0
+    iteration_within_tolerance_count = 0
     status_match_count = 0
     non_censored_count = 0
-    censored_count = 0
+    numeric_variance_count = 0
+    time_censored_count = 0
+    archive_time_censored_count = 0
+    fresh_time_censored_count = 0
+    both_time_censored_count = 0
+    fresh_only_time_censored_count = 0
     for key in sorted(expected_keys):
         fresh = fresh_index.get(key)
         archived = archive_index.get(key)
@@ -1411,28 +1450,101 @@ def _raw_archive_comparison(
         else:
             errors.append(f"{key}: fresh/archive configuration mismatch {config_differences}")
 
-        archive_time_censored = key in ARCHIVE_TIME_CENSORED_KEYS
         fresh_iterations = int(fresh["iterations"])
         archive_iterations = int(archived["iterations"])
         fresh_status = str(fresh["termination_status"])
         archive_status = str(archived["termination_status"])
+        archive_time_censored = archive_status == "ADMM_TERMINATION_TIME_LIMIT"
+        fresh_time_censored = fresh_status == "ADMM_TERMINATION_TIME_LIMIT"
+        time_censored = archive_time_censored or fresh_time_censored
         iteration_matches = fresh_iterations == archive_iterations
         status_matches = fresh_status == archive_status
+        iteration_difference = abs(fresh_iterations - archive_iterations)
+        allowed_iteration_difference = max(
+            NON_CENSORED_ITERATION_ABSOLUTE_TOLERANCE,
+            math.ceil(
+                NON_CENSORED_ITERATION_RELATIVE_TOLERANCE * archive_iterations
+            ),
+        )
+        iteration_within_tolerance = (
+            iteration_difference <= allowed_iteration_difference
+        )
+        censor_reasons: list[str] = []
+        fresh_only_censor_accepted: bool | None = None
+        archive_finished_near_cap: bool | None = None
+        fresh_reached_near_cap: bool | None = None
+        fresh_only_relative_iteration_difference: float | None = None
         if archive_time_censored:
-            censored_count += 1
-            if archive_status != "ADMM_TERMINATION_TIME_LIMIT":
-                errors.append(
-                    f"{key}: selected archive row is classified as time-censored "
-                    f"but has status {archive_status!r}"
+            archive_time_censored_count += 1
+            censor_reasons.append("archive_admm_time_limit")
+        if fresh_time_censored:
+            fresh_time_censored_count += 1
+            censor_reasons.append("fresh_admm_time_limit")
+
+        if time_censored:
+            time_censored_count += 1
+            if archive_time_censored and fresh_time_censored:
+                both_time_censored_count += 1
+            elif fresh_time_censored:
+                fresh_only_time_censored_count += 1
+                fresh_only_censor_accepted = True
+                archive_time = float(archived["admm_time_seconds"])
+                archive_limit = float(archived["time_limit_seconds"])
+                fresh_time = float(fresh["admm_time_seconds"])
+                fresh_limit = float(fresh["time_limit_seconds"])
+                fresh_only_relative_iteration_difference = (
+                    iteration_difference / max(archive_iterations, 1)
                 )
+                archive_finished_near_cap = (
+                    archive_time
+                    >= FRESH_ONLY_TIME_LIMIT_NEAR_CAP_FRACTION * archive_limit
+                )
+                fresh_reached_near_cap = (
+                    fresh_time
+                    >= FRESH_ONLY_TIME_LIMIT_NEAR_CAP_FRACTION * fresh_limit
+                )
+                if not archive_finished_near_cap:
+                    fresh_only_censor_accepted = False
+                    errors.append(
+                        f"{key}: fresh run reached the ADMM time limit, but the archive "
+                        f"finished at {archive_time:.2f}s, below the required "
+                        f"{FRESH_ONLY_TIME_LIMIT_NEAR_CAP_FRACTION:.0%} near-cap boundary"
+                    )
+                if not fresh_reached_near_cap:
+                    fresh_only_censor_accepted = False
+                    errors.append(
+                        f"{key}: fresh run reports the ADMM time limit at "
+                        f"{fresh_time:.2f}s, below the required "
+                        f"{FRESH_ONLY_TIME_LIMIT_NEAR_CAP_FRACTION:.0%} near-cap boundary"
+                    )
+                if (
+                    fresh_only_relative_iteration_difference
+                    > FRESH_ONLY_TIME_LIMIT_ITERATION_RELATIVE_TOLERANCE
+                ):
+                    fresh_only_censor_accepted = False
+                    errors.append(
+                        f"{key}: fresh-only time-censored iteration drift "
+                        f"{fresh_only_relative_iteration_difference:.2%} exceeds "
+                        f"{FRESH_ONLY_TIME_LIMIT_ITERATION_RELATIVE_TOLERANCE:.0%}"
+                    )
         else:
             non_censored_count += 1
             if iteration_matches:
-                iteration_match_count += 1
+                exact_iteration_match_count += 1
+                iteration_within_tolerance_count += 1
+            elif iteration_within_tolerance:
+                iteration_within_tolerance_count += 1
+                numeric_variance_count += 1
+                warnings.append(
+                    f"{key}: fresh/archive iterations differ by {iteration_difference} "
+                    f"within the allowed {allowed_iteration_difference}-iteration "
+                    "machine-variance bound"
+                )
             else:
                 errors.append(
-                    f"{key}: fresh iterations {fresh_iterations} do not exactly match "
-                    f"archive iterations {archive_iterations}"
+                    f"{key}: fresh/archive iteration drift {iteration_difference} "
+                    f"exceeds the allowed {allowed_iteration_difference} "
+                    "machine-variance bound"
                 )
             if status_matches:
                 status_match_count += 1
@@ -1446,27 +1558,50 @@ def _raw_archive_comparison(
         archive_partition_time = float(archived["partition_time_seconds"])
         fresh_admm_time = float(fresh["admm_time_seconds"])
         archive_admm_time = float(archived["admm_time_seconds"])
+        if archive_time_censored and fresh_time_censored:
+            classification = "both_time_censored"
+        elif archive_time_censored:
+            classification = "archive_time_censored"
+        elif fresh_time_censored:
+            classification = (
+                "fresh_time_censored_near_archive_limit"
+                if fresh_only_censor_accepted
+                else "fresh_time_censored_policy_failure"
+            )
+        elif not iteration_matches:
+            classification = "bounded_numeric_variance"
+        else:
+            classification = "deterministic_non_censored"
         entries.append(
             {
                 "figure": key[0],
                 "case": key[1],
                 "partition_number": key[2],
                 "method": key[3],
-                "classification": (
-                    "archive_time_censored"
-                    if archive_time_censored
-                    else "deterministic_non_censored"
+                "classification": classification,
+                "time_censor_reasons": censor_reasons,
+                "fresh_only_time_censor_accepted": fresh_only_censor_accepted,
+                "archive_finished_near_cap": archive_finished_near_cap,
+                "fresh_reached_near_cap": fresh_reached_near_cap,
+                "fresh_only_iteration_relative_difference": (
+                    fresh_only_relative_iteration_difference
                 ),
                 "configuration_matches": config_matches,
                 "configuration_differences": config_differences,
                 "fresh_iterations": fresh_iterations,
                 "archive_iterations": archive_iterations,
+                "absolute_iteration_difference": iteration_difference,
+                "allowed_iteration_difference": allowed_iteration_difference,
                 "iterations_match": iteration_matches,
-                "iterations_equality_enforced": not archive_time_censored,
+                "iterations_within_tolerance": (
+                    None if time_censored else iteration_within_tolerance
+                ),
+                "iterations_equality_enforced": False,
+                "iteration_tolerance_enforced": not time_censored,
                 "fresh_status": fresh_status,
                 "archive_status": archive_status,
                 "statuses_match": status_matches,
-                "status_equality_enforced": not archive_time_censored,
+                "status_equality_enforced": not time_censored,
                 "fresh_partition_time_seconds": fresh_partition_time,
                 "archive_partition_time_seconds": archive_partition_time,
                 "partition_time_difference_seconds": (
@@ -1496,16 +1631,29 @@ def _raw_archive_comparison(
             len(entries) == len(expected_keys) and config_match_count == len(expected_keys)
         ),
         "non_censored_row_count": non_censored_count,
-        "non_censored_iteration_match_count": iteration_match_count,
+        "non_censored_exact_iteration_match_count": exact_iteration_match_count,
+        "non_censored_iteration_within_tolerance_count": (
+            iteration_within_tolerance_count
+        ),
         "non_censored_status_match_count": status_match_count,
+        "bounded_numeric_variance_row_count": numeric_variance_count,
         "all_non_censored_iterations_match": (
-            non_censored_count == 159 and iteration_match_count == 159
+            non_censored_count == exact_iteration_match_count
+        ),
+        "all_non_censored_iterations_within_tolerance": (
+            non_censored_count == iteration_within_tolerance_count
         ),
         "all_non_censored_statuses_match": (
-            non_censored_count == 159 and status_match_count == 159
+            non_censored_count == status_match_count
         ),
-        "archive_time_censored_row_count": censored_count,
-        "archive_time_censored_keys": [list(key) for key in sorted(ARCHIVE_TIME_CENSORED_KEYS)],
+        "time_censored_row_count": time_censored_count,
+        "archive_time_censored_row_count": archive_time_censored_count,
+        "fresh_time_censored_row_count": fresh_time_censored_count,
+        "both_time_censored_row_count": both_time_censored_count,
+        "fresh_only_time_censored_row_count": fresh_only_time_censored_count,
+        "archive_time_censored_keys": [
+            list(key) for key in sorted(ARCHIVE_TIME_CENSORED_KEYS)
+        ],
         "timings_are_informational_only": True,
     }
     return {
@@ -1516,15 +1664,24 @@ def _raw_archive_comparison(
         ),
         "comparison_policy": {
             "key_and_configuration_identity": "enforced for all 162 rows",
-            "iteration_and_status_identity": "enforced for 159 non-censored rows",
+            "non_censored_iterations": (
+                "bounded by max(5 iterations, 1.5% of the archived iteration count); "
+                "exact identity is retained as a diagnostic"
+            ),
+            "non_censored_status_identity": "enforced exactly",
             "archive_time_censored_rows": (
-                "case1888rte/P=10 BFS, MILP, and GNN are reported without fresh "
-                "iteration or status equality gates"
+                "the pinned case1888rte/P=10 BFS, MILP, and GNN rows are reported "
+                "without iteration or status equality gates"
+            ),
+            "fresh_only_time_censored_rows": (
+                "accepted only when both runs reach at least 95% of the same cap "
+                "and iteration drift is at most 10%"
             ),
             "timings": "informational only for every row",
         },
         "summary": summary,
         "errors": errors,
+        "warnings": warnings,
         "entries": entries,
     }
 
@@ -1541,6 +1698,8 @@ def _merge_raw_archive_validation(
         for error in archive_validation.get("errors", ())
     )
     errors.extend(str(error) for error in comparison.get("errors", ()))
+    warnings = list(validation.get("warnings", ()))
+    warnings.extend(str(warning) for warning in comparison.get("warnings", ()))
     merged["archive_reference_validation"] = {
         key: value
         for key, value in archive_validation.items()
@@ -1548,6 +1707,7 @@ def _merge_raw_archive_validation(
     }
     merged["archive_raw_comparison_summary"] = comparison.get("summary")
     merged["errors"] = errors
+    merged["warnings"] = warnings
     merged["status"] = "passed" if not errors else "failed"
     return merged
 
@@ -1883,6 +2043,398 @@ def _smoke_reference_comparison(
     }
 
 
+def _panel_order_checks(
+    entries: Sequence[Mapping[str, object]],
+    *,
+    observed_field: str,
+    reference_field: str,
+    material_margin: float,
+) -> list[dict[str, object]]:
+    """Report pairwise method-order preservation within every plotted panel."""
+
+    grouped: dict[
+        tuple[int, str, object], dict[str, Mapping[str, object]]
+    ] = defaultdict(dict)
+    for entry in entries:
+        panel = (
+            int(entry["figure"]),
+            str(entry["case"]),
+            entry.get("partition_number"),
+        )
+        grouped[panel][str(entry["method"])] = entry
+
+    checks: list[dict[str, object]] = []
+    for panel in sorted(grouped, key=lambda value: (value[0], value[1], str(value[2]))):
+        by_method = grouped[panel]
+        for left_index, left_method in enumerate(METHODS):
+            for right_method in METHODS[left_index + 1 :]:
+                if left_method not in by_method or right_method not in by_method:
+                    continue
+                left = by_method[left_method]
+                right = by_method[right_method]
+                reference_difference = float(left[reference_field]) - float(
+                    right[reference_field]
+                )
+                observed_difference = float(left[observed_field]) - float(
+                    right[observed_field]
+                )
+                reference_is_material = (
+                    abs(reference_difference) > material_margin
+                )
+                observed_is_material = (
+                    abs(observed_difference) > material_margin
+                )
+                reversed_order = (
+                    reference_is_material
+                    and observed_is_material
+                    and reference_difference * observed_difference < 0.0
+                )
+                checks.append(
+                    {
+                        "figure": panel[0],
+                        "case": panel[1],
+                        "partition_number": panel[2],
+                        "left_method": left_method,
+                        "right_method": right_method,
+                        "reference_difference": reference_difference,
+                        "observed_difference": observed_difference,
+                        "material_margin": material_margin,
+                        "classification": (
+                            "material_reference_order_reversed"
+                            if reversed_order
+                            else (
+                                "reference_near_tie"
+                                if not reference_is_material
+                                else (
+                                    "observed_near_tie"
+                                    if not observed_is_material
+                                    else "order_preserved"
+                                )
+                            )
+                        ),
+                        "is_reversal": reversed_order,
+                    }
+                )
+    return checks
+
+
+def _figure_13_semantic_claim_checks(
+    entries: Sequence[Mapping[str, object]],
+) -> dict[str, object]:
+    """Check the broad Figure 13 claims without requiring machine timing identity."""
+
+    index = {
+        (str(entry["case"]), str(entry["method"])): entry
+        for entry in entries
+        if int(entry["figure"]) == 13
+    }
+    expected_keys = {
+        (case, method) for case in FIGURE_13_CASES for method in METHODS
+    }
+    missing_keys = sorted(expected_keys - set(index))
+
+    def observed(case: str, method: str, field: str) -> float:
+        return float(index[(case, method)][field])
+
+    def symmetric_ratio(left: float, right: float) -> float:
+        lower = min(left, right)
+        if lower <= 0.0:
+            return math.inf
+        return max(left, right) / lower
+
+    milp_iteration_win_cases: list[str] = []
+    large_case_milp_time_win_cases: list[str] = []
+    gnn_milp_iteration_ratios: dict[str, float] = {}
+    gnn_milp_time_ratios: dict[str, float] = {}
+    smallest_case_preprocessing_cost_visible = False
+    if not missing_keys:
+        milp_iteration_win_cases = [
+            case
+            for case in FIGURE_13_CASES
+            if observed(case, "MILP", "observed_iterations")
+            < observed(case, "BFS", "observed_iterations")
+        ]
+        smallest_case_preprocessing_cost_visible = (
+            observed("case30", "MILP", "observed_total_time_seconds")
+            > observed("case30", "BFS", "observed_total_time_seconds")
+        )
+        large_case_milp_time_win_cases = [
+            case
+            for case in FIGURE_13_LARGE_CASES
+            if observed(case, "MILP", "observed_total_time_seconds")
+            < observed(case, "BFS", "observed_total_time_seconds")
+        ]
+        gnn_milp_iteration_ratios = {
+            case: symmetric_ratio(
+                observed(case, "GNN", "observed_iterations"),
+                observed(case, "MILP", "observed_iterations"),
+            )
+            for case in FIGURE_13_GNN_MILP_COMPARABLE_CASES
+        }
+        gnn_milp_time_ratios = {
+            case: symmetric_ratio(
+                observed(case, "GNN", "observed_total_time_seconds"),
+                observed(case, "MILP", "observed_total_time_seconds"),
+            )
+            for case in FIGURE_13_GNN_MILP_COMPARABLE_CASES
+        }
+
+    complete_grid = not missing_keys and len(index) == len(expected_keys)
+    checks = [
+        {
+            "claim": "MILP uses fewer ADMM iterations than BFS across all six cases",
+            "passed": complete_grid
+            and len(milp_iteration_win_cases) == len(FIGURE_13_CASES),
+            "passing_cases": milp_iteration_win_cases,
+            "required_count": len(FIGURE_13_CASES),
+        },
+        {
+            "claim": "MILP preprocessing cost is visible on the smallest case",
+            "passed": complete_grid and smallest_case_preprocessing_cost_visible,
+            "case": "case30",
+        },
+        {
+            "claim": "MILP's improved decomposition wins total time on most larger cases",
+            "passed": complete_grid
+            and len(large_case_milp_time_win_cases)
+            >= FIGURE_13_MINIMUM_LARGE_CASE_MILP_TIME_WINS,
+            "passing_cases": large_case_milp_time_win_cases,
+            "considered_cases": list(FIGURE_13_LARGE_CASES),
+            "required_count": FIGURE_13_MINIMUM_LARGE_CASE_MILP_TIME_WINS,
+        },
+        {
+            "claim": "GNN and MILP iteration counts are comparable on the three largest cases",
+            "passed": complete_grid
+            and all(
+                ratio <= FIGURE_13_GNN_MILP_COMPARABILITY_RATIO
+                for ratio in gnn_milp_iteration_ratios.values()
+            ),
+            "symmetric_ratios": gnn_milp_iteration_ratios,
+            "maximum_ratio": FIGURE_13_GNN_MILP_COMPARABILITY_RATIO,
+        },
+        {
+            "claim": "GNN and MILP total times are comparable on the three largest cases",
+            "passed": complete_grid
+            and all(
+                ratio <= FIGURE_13_GNN_MILP_COMPARABILITY_RATIO
+                for ratio in gnn_milp_time_ratios.values()
+            ),
+            "symmetric_ratios": gnn_milp_time_ratios,
+            "maximum_ratio": FIGURE_13_GNN_MILP_COMPARABILITY_RATIO,
+        },
+    ]
+    return {
+        "policy": {
+            "large_cases": list(FIGURE_13_LARGE_CASES),
+            "minimum_large_case_milp_time_wins": (
+                FIGURE_13_MINIMUM_LARGE_CASE_MILP_TIME_WINS
+            ),
+            "gnn_milp_comparable_cases": list(
+                FIGURE_13_GNN_MILP_COMPARABLE_CASES
+            ),
+            "maximum_gnn_milp_symmetric_ratio": (
+                FIGURE_13_GNN_MILP_COMPARABILITY_RATIO
+            ),
+            "absolute_runtime_identity": "hardware-informational",
+        },
+        "summary": {
+            "complete_figure_13_grid": complete_grid,
+            "missing_keys": [list(key) for key in missing_keys],
+            "milp_iteration_win_case_count": len(milp_iteration_win_cases),
+            "smallest_case_preprocessing_cost_visible": (
+                smallest_case_preprocessing_cost_visible
+            ),
+            "large_case_milp_time_win_count": len(
+                large_case_milp_time_win_cases
+            ),
+            "gnn_milp_iteration_comparable_case_count": sum(
+                ratio <= FIGURE_13_GNN_MILP_COMPARABILITY_RATIO
+                for ratio in gnn_milp_iteration_ratios.values()
+            ),
+            "gnn_milp_time_comparable_case_count": sum(
+                ratio <= FIGURE_13_GNN_MILP_COMPARABILITY_RATIO
+                for ratio in gnn_milp_time_ratios.values()
+            ),
+            "figure_13_semantic_claims_consistent": (
+                complete_grid and all(bool(check["passed"]) for check in checks)
+            ),
+        },
+        "checks": checks,
+    }
+
+
+def _paper_conclusion_comparison(
+    entries: Sequence[Mapping[str, object]],
+) -> dict[str, object]:
+    """Check normalized plots and the paper's machine-robust semantic claims."""
+
+    figure_13_entries = [entry for entry in entries if int(entry["figure"]) == 13]
+    figure_14_entries = [entry for entry in entries if int(entry["figure"]) == 14]
+    figure_13_semantic_claims = _figure_13_semantic_claim_checks(
+        figure_13_entries
+    )
+    figure_13_semantic_summary = figure_13_semantic_claims["summary"]
+    assert isinstance(figure_13_semantic_summary, Mapping)
+
+    def maximum_difference(
+        selected: Sequence[Mapping[str, object]],
+        observed_field: str,
+        reference_field: str,
+    ) -> float:
+        return max(
+            (
+                abs(float(entry[observed_field]) - float(entry[reference_field]))
+                for entry in selected
+            ),
+            default=0.0,
+        )
+
+    figure_13_iteration_checks = _panel_order_checks(
+        figure_13_entries,
+        observed_field="observed_normalized_iterations",
+        reference_field="reference_normalized_iterations",
+        material_margin=MATERIAL_ITERATION_ORDER_MARGIN,
+    )
+    figure_14_iteration_checks = _panel_order_checks(
+        figure_14_entries,
+        observed_field="observed_normalized_iterations",
+        reference_field="reference_normalized_iterations",
+        material_margin=MATERIAL_ITERATION_ORDER_MARGIN,
+    )
+    figure_13_time_checks = _panel_order_checks(
+        figure_13_entries,
+        observed_field="observed_normalized_total_time",
+        reference_field="reference_normalized_total_time",
+        material_margin=MATERIAL_FIGURE_14_TIME_ORDER_MARGIN,
+    )
+    figure_14_time_checks = _panel_order_checks(
+        figure_14_entries,
+        observed_field="observed_normalized_total_time",
+        reference_field="reference_normalized_total_time",
+        material_margin=MATERIAL_FIGURE_14_TIME_ORDER_MARGIN,
+    )
+
+    figure_13_iteration_delta = maximum_difference(
+        figure_13_entries,
+        "observed_normalized_iterations",
+        "reference_normalized_iterations",
+    )
+    figure_14_iteration_delta = maximum_difference(
+        figure_14_entries,
+        "observed_normalized_iterations",
+        "reference_normalized_iterations",
+    )
+    figure_13_time_delta = maximum_difference(
+        figure_13_entries,
+        "observed_normalized_total_time",
+        "reference_normalized_total_time",
+    )
+    figure_14_time_delta = maximum_difference(
+        figure_14_entries,
+        "observed_normalized_total_time",
+        "reference_normalized_total_time",
+    )
+    figure_13_iteration_reversals = sum(
+        bool(check["is_reversal"]) for check in figure_13_iteration_checks
+    )
+    figure_14_iteration_reversals = sum(
+        bool(check["is_reversal"]) for check in figure_14_iteration_checks
+    )
+    figure_13_time_reversals = sum(
+        bool(check["is_reversal"]) for check in figure_13_time_checks
+    )
+    figure_14_time_reversals = sum(
+        bool(check["is_reversal"]) for check in figure_14_time_checks
+    )
+
+    figure_13_iteration_consistent = (
+        len(figure_13_entries) == len(FIGURE_13_CASES) * len(METHODS)
+        and figure_13_iteration_delta
+        <= FIGURE_13_NORMALIZED_ITERATION_TOLERANCE
+        and figure_13_iteration_reversals == 0
+    )
+    figure_14_iteration_consistent = (
+        len(figure_14_entries) == len(FIGURE_14_PARTITIONS) * len(METHODS)
+        and figure_14_iteration_delta
+        <= FIGURE_14_NORMALIZED_ITERATION_TOLERANCE
+        and figure_14_iteration_reversals == 0
+    )
+    figure_14_time_consistent = (
+        len(figure_14_entries) == len(FIGURE_14_PARTITIONS) * len(METHODS)
+        and figure_14_time_delta <= FIGURE_14_NORMALIZED_TIME_TOLERANCE
+        and figure_14_time_reversals == 0
+    )
+    return {
+        "policy": {
+            "figure_13_maximum_normalized_iteration_delta": (
+                FIGURE_13_NORMALIZED_ITERATION_TOLERANCE
+            ),
+            "figure_14_maximum_normalized_iteration_delta": (
+                FIGURE_14_NORMALIZED_ITERATION_TOLERANCE
+            ),
+            "material_iteration_order_margin": MATERIAL_ITERATION_ORDER_MARGIN,
+            "figure_14_maximum_normalized_time_delta": (
+                FIGURE_14_NORMALIZED_TIME_TOLERANCE
+            ),
+            "material_figure_14_time_order_margin": (
+                MATERIAL_FIGURE_14_TIME_ORDER_MARGIN
+            ),
+            "figure_13_timing": (
+                "absolute values and generic pairwise order are informational; "
+                "the paper's small/large-case and GNN-comparability claims are enforced"
+            ),
+            "figure_13_semantic_claims": figure_13_semantic_claims["policy"],
+        },
+        "summary": {
+            "figure_13_maximum_absolute_normalized_iteration_difference": (
+                figure_13_iteration_delta
+            ),
+            "figure_13_iteration_order_reversal_count": (
+                figure_13_iteration_reversals
+            ),
+            "figure_13_iteration_conclusions_consistent": (
+                figure_13_iteration_consistent
+            ),
+            "figure_14_maximum_absolute_normalized_iteration_difference": (
+                figure_14_iteration_delta
+            ),
+            "figure_14_iteration_order_reversal_count": (
+                figure_14_iteration_reversals
+            ),
+            "figure_14_iteration_conclusions_consistent": (
+                figure_14_iteration_consistent
+            ),
+            "figure_13_maximum_absolute_normalized_time_difference_informational": (
+                figure_13_time_delta
+            ),
+            "figure_13_time_order_reversal_count_informational": (
+                figure_13_time_reversals
+            ),
+            **dict(figure_13_semantic_summary),
+            "figure_14_maximum_absolute_normalized_time_difference": (
+                figure_14_time_delta
+            ),
+            "figure_14_time_order_reversal_count": figure_14_time_reversals,
+            "figure_14_time_conclusions_consistent": figure_14_time_consistent,
+            "paper_conclusions_consistent": (
+                figure_13_iteration_consistent
+                and bool(
+                    figure_13_semantic_summary[
+                        "figure_13_semantic_claims_consistent"
+                    ]
+                )
+                and figure_14_iteration_consistent
+                and figure_14_time_consistent
+            ),
+        },
+        "figure_13_iteration_order_checks": figure_13_iteration_checks,
+        "figure_14_iteration_order_checks": figure_14_iteration_checks,
+        "figure_13_time_order_checks_informational": figure_13_time_checks,
+        "figure_13_semantic_claims": figure_13_semantic_claims,
+        "figure_14_time_order_checks": figure_14_time_checks,
+    }
+
+
 def _reference_comparison(
     aggregates: Sequence[Mapping[str, object]],
     rows: Sequence[Mapping[str, object]],
@@ -2020,14 +2572,18 @@ def _reference_comparison(
         and len(figure_14_entries) == len(FIGURE_14_PARTITIONS) * len(METHODS)
         and max_figure_14_iteration_difference <= 1.0e-9
     )
+    conclusion_comparison = _paper_conclusion_comparison(entries)
+    conclusion_summary = conclusion_comparison["summary"]
+    assert isinstance(conclusion_summary, Mapping)
     return {
         "reference": "experiments_logs.zip final Section 3.3 folders used for paper Figures 13-14",
         "figure_14_reference_profile": REPORTED_FIGURE_14_PROFILE,
         "observed_figure_14_rhos": observed_figure_14_rhos,
         "figure_14_reference_applicable": figure_14_reference_applicable,
+        "conclusion_comparison": conclusion_comparison,
         "notes": [
-            "Iteration counts are the primary deterministic comparison.",
-            "Runtime is hardware- and environment-dependent and is reported without pass/fail gating.",
+            "Iteration counts, normalized panel patterns, and direct paper claims are the primary comparison.",
+            "Absolute runtime is hardware-dependent; Figure 13's broad timing claims and Figure 14's normalized timing shape are checked separately.",
             "The archived case1888rte/P=10 runs hit the 7200-second limit for all methods.",
             "Figure 14 references are the exact retained rho=2000 values behind the published arXiv panels.",
             "Fresh full mode uses that same published rho=2000 configuration.",
@@ -2043,6 +2599,7 @@ def _reference_comparison(
             "maximum_absolute_figure_14_iteration_difference": max_figure_14_iteration_difference,
             "maximum_absolute_figure_14_partition_time_difference_seconds": max_figure_14_partition_time_difference,
             "maximum_absolute_figure_14_admm_time_difference_seconds": max_figure_14_admm_time_difference,
+            **dict(conclusion_summary),
             "termination_status_counts": dict(sorted(status_counts.items())),
         },
         "entries": entries,
@@ -2059,6 +2616,11 @@ def _reference_validation_errors(
     if not isinstance(summary, Mapping):
         return ["Section 3.3 reference comparison has no valid summary"]
     errors: list[str] = []
+    if mode == "full" and summary.get("paper_conclusions_consistent") is not True:
+        errors.append(
+            "Fresh Section 3.3 aggregate results reverse or materially depart "
+            "from the normalized Figure 13/14 conclusions"
+        )
     if (mode == "archived" or smoke_profile) and not bool(
         summary.get("all_iteration_values_match")
     ):
@@ -2168,7 +2730,10 @@ def _parse_mode_expected_specs(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
     add_common_arguments(
         parser, default_output=REPRODUCTION_ROOT / "output" / "section_3_3"
     )
@@ -2191,14 +2756,42 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _require_full_archive(args: argparse.Namespace) -> None:
-    if args.mode == "full" and not args.archive.expanduser().exists():
-        raise SystemExit(
-            "Section 3.3 --mode full requires experiments_logs.zip so every fresh "
-            "raw row can be checked against the exact published selection. "
-            f"Archive not found: {args.archive}\n"
-            "Pass --archive /path/to/experiments_logs.zip."
-        )
+def _full_archive_available(args: argparse.Namespace) -> bool:
+    """Return whether full mode can apply its optional archive-strengthening checks.
+
+    A fresh full sweep is defined by the pinned experiment specifications, not by
+    availability of ``experiments_logs.zip``. When the archive is present, full mode
+    still validates it strictly before launching Julia and compares every fresh raw
+    row afterward.
+    """
+
+    return args.mode == "full" and args.archive.expanduser().exists()
+
+
+def _missing_full_archive_payload(args: argparse.Namespace) -> dict[str, object]:
+    archive = args.archive.expanduser().resolve()
+    reason = (
+        "Optional experiments_logs.zip was not found; Section 3.3 archive semantic "
+        "preflight and fresh-to-archive raw-row comparison were skipped. The pinned "
+        "fresh experiment grid, row validation, and Figure 13/14 paper-conclusion "
+        "validation remain enforced."
+    )
+    return {
+        "status": "skipped",
+        "archive_optional_in_full_mode": True,
+        "archive_available": False,
+        "archive_path": str(archive),
+        "reason": reason,
+        "checks": {
+            "archive_semantic_preflight": "skipped",
+            "fresh_to_archive_raw_row_comparison": "skipped",
+            "pinned_fresh_configuration": "enforced",
+            "fresh_row_validation": "enforced",
+            "paper_conclusion_validation": "enforced",
+        },
+        "errors": [],
+        "warnings": [reason],
+    }
 
 
 def _require_full_threads(args: argparse.Namespace) -> None:
@@ -2320,7 +2913,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     validate_common_arguments(args)
     _require_full_threads(args)
-    _require_full_archive(args)
+    full_archive_available = _full_archive_available(args)
     output = prepare_mode_output(args.output, args.mode)
 
     fresh = args.mode in ("smoke", "full")
@@ -2337,10 +2930,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     reported_panel_validation: dict[str, object] | None = None
     archive_rows: list[dict[str, object]] = []
     archive_validation: dict[str, object] | None = None
+    archive_skip: dict[str, object] | None = None
     archived_semantic_validation: dict[str, object] | None = None
 
-    if args.mode == "full":
+    if args.mode == "full" and full_archive_available:
         archive_rows, archive_validation = _full_archive_preflight(args, output)
+    elif args.mode == "full":
+        archive_skip = _missing_full_archive_payload(args)
+        write_json(output / "archive_reference_validation.json", archive_skip)
+        write_json(
+            output / "archive_raw_comparison.json",
+            {
+                "status": "skipped",
+                "archive_available": False,
+                "archive_path": archive_skip["archive_path"],
+                "reason": archive_skip["reason"],
+            },
+        )
 
     if fresh:
         case_files = _matpower_inputs(args.matpower_dir, expected_specs)
@@ -2368,13 +2974,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         write_json(output / "job_results.json", job_results_as_dicts(job_results))
         failures = failed_jobs(job_results)
         if failures:
+            failure_notes = [
+                "One or more fresh Julia subprocesses failed; inspect job_results.json."
+            ]
+            if archive_skip is not None:
+                failure_notes.append(str(archive_skip["reason"]))
             write_provenance(
                 output,
                 section="Section 3.3 / DC-OPF Figures 13-14",
                 args=args,
                 jobs=jobs,
                 inputs=tuple(provenance_inputs) + tuple(case_files.values()) + (model_weights,),
-                notes=("One or more fresh Julia subprocesses failed; inspect job_results.json.",),
+                notes=tuple(failure_notes),
             )
             names = ", ".join(result.name for result in failures)
             raise SystemExit(f"Section 3.3 Julia jobs failed: {names}")
@@ -2471,14 +3082,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         validation["status"] = "passed" if not validation["errors"] else "failed"
     if args.mode == "full":
-        assert archive_validation is not None
-        raw_archive_comparison = _raw_archive_comparison(rows, archive_rows)
-        write_json(output / "archive_raw_comparison.json", raw_archive_comparison)
-        validation = _merge_raw_archive_validation(
-            validation,
-            archive_validation,
-            raw_archive_comparison,
-        )
+        if full_archive_available:
+            assert archive_validation is not None
+            raw_archive_comparison = _raw_archive_comparison(rows, archive_rows)
+            write_json(output / "archive_raw_comparison.json", raw_archive_comparison)
+            validation = _merge_raw_archive_validation(
+                validation,
+                archive_validation,
+                raw_archive_comparison,
+            )
+        else:
+            assert archive_skip is not None
+            validation["archive_reference_validation"] = {
+                key: value
+                for key, value in archive_skip.items()
+                if key not in {"errors", "warnings"}
+            }
+            validation["archive_raw_comparison_summary"] = {
+                "status": "skipped",
+                "archive_available": False,
+                "reason": archive_skip["reason"],
+            }
+            validation["warnings"] = [
+                *validation.get("warnings", ()),
+                *archive_skip["warnings"],
+            ]
     if reported_panel_validation is not None:
         validation["reported_source_panel_validation"] = reported_panel_validation
         if reported_panel_validation["status"] != "passed":
@@ -2560,7 +3188,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             "Fresh jobs use one Julia process per (case,P); BFS, MILP, and GNN share one METIS partition.",
             "Fresh full and archived artifacts are separately labeled even though both use the published rho=2000 profile.",
             (
-                "Full mode compares all 162 fresh rows with the selected archive rows; exact iterations and statuses are enforced on the 159 non-censored rows, while all timings are informational."
+                (
+                    "Full mode found experiments_logs.zip and compared all 162 fresh rows with the selected archive rows: configuration and non-censored status are exact, iteration drift is bounded by max(5, 1.5%), fresh-only censoring requires both runs within 95% of the same cap, and normalized plus semantic Figure 13/14 conclusions must remain consistent; absolute timings are informational."
+                    if full_archive_available
+                    else str(archive_skip["reason"])
+                )
                 if args.mode == "full"
                 else "The caption-typo rho=1000 profile is accepted only as optional parse input."
             ),

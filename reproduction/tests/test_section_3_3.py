@@ -103,6 +103,56 @@ def _raw_comparison_rows() -> tuple[list[dict[str, object]], list[dict[str, obje
     return fresh_rows, archive_rows
 
 
+def _paper_conclusion_entries() -> list[dict[str, object]]:
+    entries: list[dict[str, object]] = []
+    for case, method_values in section_3_3.REFERENCE_FIGURE_13.items():
+        maximum_iterations = max(value[0] for value in method_values.values())
+        maximum_time = max(value[1] for value in method_values.values())
+        for method, (iterations, total_time) in method_values.items():
+            entries.append(
+                {
+                    "figure": 13,
+                    "case": case,
+                    "partition_number": None,
+                    "method": method,
+                    "observed_iterations": iterations,
+                    "reference_iterations": iterations,
+                    "observed_total_time_seconds": total_time,
+                    "reference_total_time_seconds": total_time,
+                    "observed_normalized_iterations": iterations
+                    / maximum_iterations,
+                    "reference_normalized_iterations": iterations
+                    / maximum_iterations,
+                    "observed_normalized_total_time": total_time / maximum_time,
+                    "reference_normalized_total_time": total_time / maximum_time,
+                }
+            )
+    for partition_number, method_values in section_3_3.REFERENCE_FIGURE_14.items():
+        maximum_iterations = max(value[0] for value in method_values.values())
+        maximum_time = max(value[1] + value[2] for value in method_values.values())
+        for method, (iterations, partition_time, admm_time) in method_values.items():
+            total_time = partition_time + admm_time
+            entries.append(
+                {
+                    "figure": 14,
+                    "case": "case57",
+                    "partition_number": partition_number,
+                    "method": method,
+                    "observed_iterations": iterations,
+                    "reference_iterations": iterations,
+                    "observed_total_time_seconds": total_time,
+                    "reference_total_time_seconds": total_time,
+                    "observed_normalized_iterations": iterations
+                    / maximum_iterations,
+                    "reference_normalized_iterations": iterations
+                    / maximum_iterations,
+                    "observed_normalized_total_time": total_time / maximum_time,
+                    "reference_normalized_total_time": total_time / maximum_time,
+                }
+            )
+    return entries
+
+
 def _semantic_archive_rows() -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     counter = 1_000
@@ -411,13 +461,99 @@ class Section33Figure14ProfileTests(unittest.TestCase):
         self.assertIn("2000.0", job.command)
         self.assertNotIn("1000.0", job.command)
 
-    def test_full_requires_archive_for_raw_comparison(self) -> None:
+    def test_full_without_archive_reaches_fresh_job_layer_and_marks_skip(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            args = argparse.Namespace(
-                mode="full", archive=Path(temporary) / "missing.zip"
+            root = Path(temporary)
+            archive = root / "missing.zip"
+            output = root / "output"
+            case_files = {
+                case: root / f"{case}.m"
+                for case in section_3_3.FIGURE_13_CASES
+            }
+            sentinel_job = section_3_3.Job("fresh-sentinel", ("julia",))
+
+            with (
+                mock.patch.object(
+                    section_3_3, "_full_archive_preflight"
+                ) as archive_preflight,
+                mock.patch.object(
+                    section_3_3, "_matpower_inputs", return_value=case_files
+                ),
+                mock.patch.object(
+                    section_3_3, "_resolve_python", return_value="/pinned/python"
+                ),
+                mock.patch.object(section_3_3, "_check_python_dependencies"),
+                mock.patch.object(section_3_3, "_check_pycall_dependencies"),
+                mock.patch.object(
+                    section_3_3, "_jobs_for_specs", return_value=[sentinel_job]
+                ),
+                mock.patch.object(
+                    section_3_3,
+                    "run_jobs",
+                    side_effect=RuntimeError("fresh job layer reached"),
+                ) as run_jobs,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "fresh job layer reached"):
+                    section_3_3.main(
+                        (
+                            "--mode", "full",
+                            "--archive", str(archive),
+                            "--output", str(output),
+                        )
+                    )
+
+            archive_preflight.assert_not_called()
+            run_jobs.assert_called_once()
+            self.assertFalse(
+                section_3_3._full_archive_available(
+                    argparse.Namespace(mode="full", archive=archive)
+                )
             )
-            with self.assertRaisesRegex(SystemExit, "requires experiments_logs.zip"):
-                section_3_3._require_full_archive(args)
+            full_output = output / "full"
+            reference_skip = json.loads(
+                (full_output / "archive_reference_validation.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            raw_skip = json.loads(
+                (full_output / "archive_raw_comparison.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(reference_skip["status"], "skipped")
+            self.assertEqual(raw_skip["status"], "skipped")
+            self.assertEqual(
+                reference_skip["checks"]["paper_conclusion_validation"],
+                "enforced",
+            )
+
+    def test_full_with_archive_still_enters_strict_preflight_before_jobs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive = root / "experiments_logs.zip"
+            archive.write_bytes(b"placeholder")
+
+            with (
+                mock.patch.object(
+                    section_3_3,
+                    "_full_archive_preflight",
+                    side_effect=RuntimeError("strict preflight reached"),
+                ) as archive_preflight,
+                mock.patch.object(section_3_3, "run_jobs") as run_jobs,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "strict preflight reached"):
+                    section_3_3.main(
+                        ("--mode", "full", "--archive", str(archive))
+                    )
+
+            archive_preflight.assert_called_once()
+            run_jobs.assert_not_called()
+
+    def test_archived_mode_still_requires_archive(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            missing = Path(temporary) / "missing.zip"
+            with self.assertRaisesRegex(SystemExit, "Archive not found"):
+                section_3_3.main(("--mode", "archived", "--archive", str(missing)))
 
     def test_full_rejects_non_paper_threads_before_output_or_jobs(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -777,7 +913,7 @@ class Section33ArchiveSemanticManifestTests(unittest.TestCase):
 
 
 class Section33RawArchiveComparisonTests(unittest.TestCase):
-    def test_exact_159_rows_are_gated_and_three_censored_rows_are_reported(self) -> None:
+    def test_exact_stable_rows_and_archive_censored_rows_are_reported(self) -> None:
         fresh, archived = _raw_comparison_rows()
 
         comparison = section_3_3._raw_archive_comparison(fresh, archived)
@@ -788,9 +924,14 @@ class Section33RawArchiveComparisonTests(unittest.TestCase):
         self.assertTrue(summary["exact_key_identity"])
         self.assertTrue(summary["all_configurations_match"])
         self.assertEqual(summary["non_censored_row_count"], 159)
-        self.assertEqual(summary["non_censored_iteration_match_count"], 159)
+        self.assertEqual(summary["non_censored_exact_iteration_match_count"], 159)
+        self.assertEqual(
+            summary["non_censored_iteration_within_tolerance_count"], 159
+        )
         self.assertEqual(summary["non_censored_status_match_count"], 159)
         self.assertEqual(summary["archive_time_censored_row_count"], 3)
+        self.assertEqual(summary["fresh_time_censored_row_count"], 0)
+        self.assertEqual(summary["time_censored_row_count"], 3)
         self.assertTrue(summary["timings_are_informational_only"])
         censored = [
             entry
@@ -802,17 +943,148 @@ class Section33RawArchiveComparisonTests(unittest.TestCase):
         self.assertTrue(all(not entry["status_equality_enforced"] for entry in censored))
         self.assertTrue(all(not entry["timing_equality_enforced"] for entry in censored))
 
-    def test_non_censored_iteration_and_status_mismatch_fail(self) -> None:
+    def test_bounded_non_censored_iteration_variance_passes_with_warning(self) -> None:
         fresh, archived = _raw_comparison_rows()
-        fresh[0]["iterations"] = int(fresh[0]["iterations"]) + 1
+        fresh[0]["iterations"] = int(fresh[0]["iterations"]) + 5
+
+        comparison = section_3_3._raw_archive_comparison(fresh, archived)
+
+        self.assertEqual(comparison["status"], "passed")
+        summary = comparison["summary"]
+        self.assertFalse(summary["all_non_censored_iterations_match"])
+        self.assertTrue(summary["all_non_censored_iterations_within_tolerance"])
+        self.assertEqual(summary["bounded_numeric_variance_row_count"], 1)
+        self.assertTrue(comparison["warnings"])
+        variance_entry = next(
+            entry
+            for entry in comparison["entries"]
+            if not entry["iterations_match"] and not entry["time_censor_reasons"]
+        )
+        self.assertEqual(
+            variance_entry["classification"], "bounded_numeric_variance"
+        )
+
+    def test_excessive_non_censored_iteration_variance_fails(self) -> None:
+        fresh, archived = _raw_comparison_rows()
+        fresh[0]["iterations"] = int(fresh[0]["iterations"]) + 6
+
+        comparison = section_3_3._raw_archive_comparison(fresh, archived)
+
+        self.assertEqual(comparison["status"], "failed")
+        self.assertFalse(
+            comparison["summary"]["all_non_censored_iterations_within_tolerance"]
+        )
+        self.assertTrue(
+            any("machine-variance bound" in error for error in comparison["errors"])
+        )
+
+    def test_relative_non_censored_iteration_boundary_is_enforced(self) -> None:
+        fresh, archived = _raw_comparison_rows()
+        archived[0]["iterations"] = 1_000
+        fresh[0]["iterations"] = 1_015
+
+        accepted = section_3_3._raw_archive_comparison(fresh, archived)
+
+        self.assertEqual(accepted["status"], "passed")
+        entry = next(
+            item
+            for item in accepted["entries"]
+            if section_3_3._raw_row_key(item)
+            == section_3_3._raw_row_key(fresh[0])
+        )
+        self.assertEqual(entry["allowed_iteration_difference"], 15)
+
+        fresh[0]["iterations"] = 1_016
+        rejected = section_3_3._raw_archive_comparison(fresh, archived)
+        self.assertEqual(rejected["status"], "failed")
+
+    def test_fresh_only_time_limit_requires_near_cap_archive(self) -> None:
+        fresh, archived = _raw_comparison_rows()
         fresh[0]["termination_status"] = "ADMM_TERMINATION_TIME_LIMIT"
 
         comparison = section_3_3._raw_archive_comparison(fresh, archived)
 
         self.assertEqual(comparison["status"], "failed")
-        self.assertFalse(comparison["summary"]["all_non_censored_iterations_match"])
+        self.assertTrue(
+            any("near-cap boundary" in error for error in comparison["errors"])
+        )
+
+    def test_fresh_only_time_limit_near_archive_cap_is_censored(self) -> None:
+        fresh, archived = _raw_comparison_rows()
+        archived[0]["admm_time_seconds"] = 7_076.0
+        fresh[0]["admm_time_seconds"] = 7_200.0
+        fresh[0]["iterations"] = 95
+        fresh[0]["termination_status"] = "ADMM_TERMINATION_TIME_LIMIT"
+
+        comparison = section_3_3._raw_archive_comparison(fresh, archived)
+
+        self.assertEqual(comparison["status"], "passed")
+        summary = comparison["summary"]
+        self.assertEqual(summary["fresh_only_time_censored_row_count"], 1)
+        self.assertEqual(summary["time_censored_row_count"], 4)
+        entry = next(
+            item
+            for item in comparison["entries"]
+            if item["classification"] == "fresh_time_censored_near_archive_limit"
+        )
+        self.assertFalse(entry["status_equality_enforced"])
+        self.assertIn("fresh_admm_time_limit", entry["time_censor_reasons"])
+        self.assertTrue(entry["fresh_only_time_censor_accepted"])
+        self.assertTrue(entry["archive_finished_near_cap"])
+        self.assertTrue(entry["fresh_reached_near_cap"])
+        self.assertIsNone(entry["iterations_within_tolerance"])
+
+    def test_fresh_only_time_limit_requires_fresh_runtime_near_cap(self) -> None:
+        fresh, archived = _raw_comparison_rows()
+        archived[0]["admm_time_seconds"] = 7_076.0
+        fresh[0]["admm_time_seconds"] = 1.0
+        fresh[0]["termination_status"] = "ADMM_TERMINATION_TIME_LIMIT"
+
+        comparison = section_3_3._raw_archive_comparison(fresh, archived)
+
+        self.assertEqual(comparison["status"], "failed")
+        entry = next(
+            item
+            for item in comparison["entries"]
+            if item["classification"] == "fresh_time_censored_policy_failure"
+        )
+        self.assertFalse(entry["fresh_only_time_censor_accepted"])
+        self.assertTrue(entry["archive_finished_near_cap"])
+        self.assertFalse(entry["fresh_reached_near_cap"])
+        self.assertIsNone(entry["iterations_within_tolerance"])
+        self.assertTrue(
+            any("reports the ADMM time limit" in error for error in comparison["errors"])
+        )
+
+    def test_fresh_only_time_limit_rejects_excessive_iteration_drift(self) -> None:
+        fresh, archived = _raw_comparison_rows()
+        archived[0]["admm_time_seconds"] = 7_076.0
+        fresh[0]["admm_time_seconds"] = 7_200.0
+        fresh[0]["iterations"] = 89
+        fresh[0]["termination_status"] = "ADMM_TERMINATION_TIME_LIMIT"
+
+        comparison = section_3_3._raw_archive_comparison(fresh, archived)
+
+        self.assertEqual(comparison["status"], "failed")
+        entry = next(
+            item
+            for item in comparison["entries"]
+            if item["classification"] == "fresh_time_censored_policy_failure"
+        )
+        self.assertFalse(entry["fresh_only_time_censor_accepted"])
+        self.assertGreater(entry["fresh_only_iteration_relative_difference"], 0.10)
+        self.assertTrue(
+            any("iteration drift" in error for error in comparison["errors"])
+        )
+
+    def test_non_censored_status_mismatch_fails(self) -> None:
+        fresh, archived = _raw_comparison_rows()
+        fresh[0]["termination_status"] = "ADMM_TERMINATION_FAILED"
+
+        comparison = section_3_3._raw_archive_comparison(fresh, archived)
+
+        self.assertEqual(comparison["status"], "failed")
         self.assertFalse(comparison["summary"]["all_non_censored_statuses_match"])
-        self.assertTrue(any("iterations" in error for error in comparison["errors"]))
         self.assertTrue(any("status" in error for error in comparison["errors"]))
 
     def test_configuration_mismatch_fails_even_on_censored_row(self) -> None:
@@ -826,6 +1098,226 @@ class Section33RawArchiveComparisonTests(unittest.TestCase):
         self.assertEqual(comparison["status"], "failed")
         self.assertFalse(comparison["summary"]["all_configurations_match"])
         self.assertTrue(any("configuration mismatch" in error for error in comparison["errors"]))
+
+
+    def test_material_aggregate_order_reversal_is_detected(self) -> None:
+        entries = [
+            {
+                "figure": 13,
+                "case": "case30",
+                "partition_number": None,
+                "method": "BFS",
+                "observed": 0.60,
+                "reference": 0.20,
+            },
+            {
+                "figure": 13,
+                "case": "case30",
+                "partition_number": None,
+                "method": "MILP",
+                "observed": 0.40,
+                "reference": 0.50,
+            },
+            {
+                "figure": 13,
+                "case": "case30",
+                "partition_number": None,
+                "method": "GNN",
+                "observed": 1.00,
+                "reference": 1.00,
+            },
+        ]
+
+        checks = section_3_3._panel_order_checks(
+            entries,
+            observed_field="observed",
+            reference_field="reference",
+            material_margin=0.01,
+        )
+
+        reversal = next(
+            check
+            for check in checks
+            if check["left_method"] == "BFS" and check["right_method"] == "MILP"
+        )
+        self.assertTrue(reversal["is_reversal"])
+        self.assertEqual(
+            reversal["classification"], "material_reference_order_reversed"
+        )
+
+    def test_near_tie_aggregate_order_change_is_not_a_reversal(self) -> None:
+        entries = [
+            {
+                "figure": 14,
+                "case": "case57",
+                "partition_number": 8,
+                "method": "BFS",
+                "observed": 0.51,
+                "reference": 0.500,
+            },
+            {
+                "figure": 14,
+                "case": "case57",
+                "partition_number": 8,
+                "method": "MILP",
+                "observed": 0.49,
+                "reference": 0.505,
+            },
+        ]
+
+        checks = section_3_3._panel_order_checks(
+            entries,
+            observed_field="observed",
+            reference_field="reference",
+            material_margin=0.01,
+        )
+
+        self.assertEqual(len(checks), 1)
+        self.assertFalse(checks[0]["is_reversal"])
+        self.assertEqual(checks[0]["classification"], "reference_near_tie")
+
+    def test_material_reference_with_observed_near_tie_is_not_reversed(self) -> None:
+        entries = [
+            {
+                "figure": 14,
+                "case": "case57",
+                "partition_number": 8,
+                "method": "BFS",
+                "observed": 0.499,
+                "reference": 0.52,
+            },
+            {
+                "figure": 14,
+                "case": "case57",
+                "partition_number": 8,
+                "method": "MILP",
+                "observed": 0.500,
+                "reference": 0.50,
+            },
+        ]
+
+        checks = section_3_3._panel_order_checks(
+            entries,
+            observed_field="observed",
+            reference_field="reference",
+            material_margin=0.01,
+        )
+
+        self.assertEqual(len(checks), 1)
+        self.assertFalse(checks[0]["is_reversal"])
+        self.assertEqual(checks[0]["classification"], "observed_near_tie")
+
+    def test_paper_conclusion_comparison_accepts_complete_reference_shape(self) -> None:
+        comparison = section_3_3._paper_conclusion_comparison(
+            _paper_conclusion_entries()
+        )
+
+        summary = comparison["summary"]
+        self.assertTrue(summary["figure_13_iteration_conclusions_consistent"])
+        self.assertTrue(summary["figure_13_semantic_claims_consistent"])
+        self.assertEqual(summary["milp_iteration_win_case_count"], 6)
+        self.assertEqual(summary["large_case_milp_time_win_count"], 4)
+        self.assertEqual(summary["gnn_milp_iteration_comparable_case_count"], 3)
+        self.assertEqual(summary["gnn_milp_time_comparable_case_count"], 3)
+        self.assertTrue(summary["figure_14_iteration_conclusions_consistent"])
+        self.assertTrue(summary["figure_14_time_conclusions_consistent"])
+        self.assertTrue(summary["paper_conclusions_consistent"])
+
+    def test_paper_conclusion_comparison_rejects_semantic_timing_contradiction(
+        self,
+    ) -> None:
+        entries = _paper_conclusion_entries()
+        by_key = {
+            (
+                int(entry["figure"]),
+                str(entry["case"]),
+                entry["partition_number"],
+                str(entry["method"]),
+            ): entry
+            for entry in entries
+        }
+        by_key[(13, "case30", None, "MILP")][
+            "observed_total_time_seconds"
+        ] = 0.5 * float(
+            by_key[(13, "case30", None, "BFS")]["observed_total_time_seconds"]
+        )
+
+        comparison = section_3_3._paper_conclusion_comparison(entries)
+
+        self.assertFalse(
+            comparison["summary"]["smallest_case_preprocessing_cost_visible"]
+        )
+        self.assertFalse(
+            comparison["summary"]["figure_13_semantic_claims_consistent"]
+        )
+        self.assertFalse(comparison["summary"]["paper_conclusions_consistent"])
+
+    def test_paper_conclusion_normalized_delta_gates_are_end_to_end(self) -> None:
+        mutations = (
+            (
+                (13, "case30", None, "GNN"),
+                "observed_normalized_iterations",
+                section_3_3.FIGURE_13_NORMALIZED_ITERATION_TOLERANCE,
+                "figure_13_iteration_conclusions_consistent",
+            ),
+            (
+                (14, "case57", 13, "BFS"),
+                "observed_normalized_iterations",
+                section_3_3.FIGURE_14_NORMALIZED_ITERATION_TOLERANCE,
+                "figure_14_iteration_conclusions_consistent",
+            ),
+            (
+                (14, "case57", 13, "BFS"),
+                "observed_normalized_total_time",
+                section_3_3.FIGURE_14_NORMALIZED_TIME_TOLERANCE,
+                "figure_14_time_conclusions_consistent",
+            ),
+        )
+        for key, field, tolerance, expected_flag in mutations:
+            with self.subTest(expected_flag=expected_flag):
+                entries = _paper_conclusion_entries()
+                target = next(
+                    entry
+                    for entry in entries
+                    if (
+                        int(entry["figure"]),
+                        str(entry["case"]),
+                        entry["partition_number"],
+                        str(entry["method"]),
+                    )
+                    == key
+                )
+                reference_field = field.replace("observed_", "reference_", 1)
+                target[field] = float(target[reference_field]) + tolerance + 0.001
+
+                comparison = section_3_3._paper_conclusion_comparison(entries)
+
+                self.assertFalse(comparison["summary"][expected_flag])
+                self.assertFalse(
+                    comparison["summary"]["paper_conclusions_consistent"]
+                )
+
+    def test_full_validation_accepts_preserved_paper_conclusions(self) -> None:
+        comparison = {"summary": {"paper_conclusions_consistent": True}}
+
+        self.assertEqual(
+            section_3_3._reference_validation_errors(
+                comparison, mode="full", smoke_profile=False
+            ),
+            [],
+        )
+
+    def test_full_validation_rejects_paper_conclusion_departure(self) -> None:
+        comparison = {"summary": {"paper_conclusions_consistent": False}}
+
+        self.assertTrue(
+            any(
+                "aggregate results" in error
+                for error in section_3_3._reference_validation_errors(
+                    comparison, mode="full", smoke_profile=False
+                )
+            )
+        )
 
     def test_archived_reconstruction_still_requires_exact_retained_times(self) -> None:
         comparison = {

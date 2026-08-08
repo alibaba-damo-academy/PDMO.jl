@@ -667,9 +667,15 @@ def parse_method_spec(text: str) -> tuple[str, ...]:
     return tuple(method for method in PAPER_METHODS if method in selected)
 
 
-if __name__ == "__main__":
+def main(argv=None) -> int:
+    """Dispatch imports and script execution to the reviewer implementation."""
+
     try:
-        from .section_3_4_impl import main
+        from .section_3_4_impl import main as strict_main
     except ImportError:
-        from section_3_4_impl import main
+        from section_3_4_impl import main as strict_main
+    return strict_main(argv)
+
+
+if __name__ == "__main__":
     raise SystemExit(main())

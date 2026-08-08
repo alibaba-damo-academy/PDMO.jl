@@ -440,7 +440,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-iter",
         type=int,
         default=PAPER_MAX_ITER,
-        help="Fresh full-run ADMM iteration limit (smoke is capped at 200).",
+        help=(
+            "Paper-pinned ADMM iteration limit for full/reported mode; smoke is "
+            "always capped at 200"
+        ),
     )
     return parser
 

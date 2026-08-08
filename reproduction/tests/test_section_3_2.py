@@ -12,6 +12,7 @@ from unittest import mock
 import zipfile
 
 from reproduction import section_3_2
+from reproduction.common import JobResult
 
 
 def _method_block(
@@ -23,6 +24,9 @@ def _method_block(
     iterations: tuple[int, ...],
     stop_iter: int | None,
     status: str = "ADMM_TERMINATION_OPTIMAL",
+    milp_solve_status: str | None = None,
+    milp_solution_status: str = "feasible",
+    milp_fingerprint: tuple[int, int, int, int] | None = None,
 ) -> str:
     titles = {
         "basic": "LP formulation",
@@ -30,6 +34,18 @@ def _method_block(
         "milp": "MILP bipartization",
     }
     lines = [f"Running Bipartite ADMM with {titles[method]}..."]
+    if method == "milp" and milp_solve_status is not None:
+        lines.extend(
+            (
+                "Running HiGHS 1.11.0",
+                "Solving report",
+                f"  Status            {milp_solve_status}",
+                "  Primal bound      10",
+                "  Dual bound        9",
+                "  Gap               1% (tolerance: 1%)",
+                f"  Solution status   {milp_solution_status}",
+            )
+        )
     if method == "basic":
         lines.append(
             "ADMMBipartiteGraph: The graph is already bipartite; "
@@ -38,6 +54,16 @@ def _method_block(
     else:
         kind = f"{method.upper()}_BIPARTIZATION"
         lines.append(f"ADMMBipartiteGraph: {kind} took {partition_time} seconds")
+    if method == "milp" and milp_fingerprint is not None:
+        nodes, left, right, edges = milp_fingerprint
+        lines.extend(
+            (
+                "Summary of ADMM Bipartitie Graph:",
+                f"    Number of nodes             = {nodes}",
+                f"    Parition size (left, right) = ({left}, {right})",
+                f"    Number of edges             = {edges}",
+            )
+        )
     lines.append(f"ADMM: initialization took {initialization_time} seconds")
     for iteration in iterations:
         lines.append(f" {iteration} 1 2 3 4 5 6 7")
@@ -219,8 +245,64 @@ class Section32ParserTests(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertEqual([row["iterations"] for row in rows], [21, 22, 23])
         self.assertEqual([row["latest_progress_iter"] for row in rows], [21, 22, 23])
-        self.assertTrue(all(row["iteration_source"] == "latest_progress" for row in rows))
-        self.assertTrue(all("used latest progress-table" in row["parse_warnings"] for row in rows))
+        self.assertTrue(
+            all(row["iteration_source"] == "latest_progress" for row in rows)
+        )
+        self.assertTrue(
+            all(
+                "used latest progress-table" in row["parse_warnings"]
+                for row in rows
+            )
+        )
+
+    def test_milp_reports_parse_optimal_and_time_limit_feasible(self) -> None:
+        for nodes, seed, expected_status, expected_time_limit in (
+            (200, 1, "Optimal", False),
+            (400, 1, "Time limit reached", True),
+        ):
+            with self.subTest(nodes=nodes, seed=seed):
+                rows, _, errors = self._parse(_paper_log_text(nodes, seed))
+                milp = next(row for row in rows if row["method"] == "milp")
+                self.assertEqual(errors, [])
+                self.assertTrue(milp["milp_metadata_available"])
+                self.assertEqual(milp["milp_solve_status"], expected_status)
+                self.assertIs(milp["milp_time_limit"], expected_time_limit)
+                self.assertTrue(milp["milp_solution_feasible"])
+                self.assertTrue(milp["milp_partition_valid"])
+
+    def test_milp_report_rejects_missing_duplicate_unknown_or_infeasible(
+        self,
+    ) -> None:
+        canonical = _paper_log_text(200, 1)
+        mutations = {
+            "missing": canonical.replace("Solving report\n", "", 1),
+            "duplicate": canonical.replace(
+                "Solving report\n",
+                "Solving report\nSolving report\n",
+                1,
+            ),
+            "unknown": canonical.replace(
+                "Status            Optimal",
+                "Status            Interrupted",
+                1,
+            ),
+            "infeasible": canonical.replace(
+                "Solution status   feasible",
+                "Solution status   infeasible",
+                1,
+            ),
+        }
+        for mutation, text in mutations.items():
+            with self.subTest(mutation=mutation):
+                _, _, errors = self._parse(text)
+                self.assertTrue(errors)
+                self.assertTrue(
+                    any(
+                        "HiGHS" in error
+                        or "Solving report" in error
+                        for error in errors
+                    )
+                )
 
     def test_missing_method_section_is_rejected(self) -> None:
         rows, metadata, parse_errors = self._parse(
@@ -265,6 +347,157 @@ class Section32AggregationTests(unittest.TestCase):
         self.assertAlmostEqual(float(bfs["admm_time_mean"]), 6.0)
         self.assertAlmostEqual(float(bfs["total_time_mean"]), 9.0)
 
+    @staticmethod
+    def _conclusion_summaries() -> list[dict[str, object]]:
+        summaries: list[dict[str, object]] = []
+        for nodes in section_3_2.PAPER_NODES:
+            total_times = (
+                {"basic": 100.0, "bfs": 120.0, "milp": 130.0}
+                if nodes == 200
+                else {"basic": 300.0, "bfs": 100.0, "milp": 110.0}
+            )
+            iterations = {"basic": 100.0, "bfs": 200.0, "milp": 150.0}
+            for method in section_3_2.METHODS:
+                summaries.append(
+                    {
+                        "nodes": nodes,
+                        "method": method,
+                        "n_runs": 10,
+                        "iterations_mean": iterations[method],
+                        "total_time_mean": total_times[method],
+                        "partition_time_mean": 0.0,
+                        "initialization_time_mean": 0.0,
+                        "admm_time_mean": total_times[method],
+                        "status_counts": "ADMM_TERMINATION_OPTIMAL:10",
+                    }
+                )
+        return summaries
+
+    def test_complete_fresh_grid_enforces_robust_conclusions_only(self) -> None:
+        for mode in ("full", "parse"):
+            with self.subTest(mode=mode):
+                report, errors = section_3_2.evaluate_conclusion_consistency(
+                    self._conclusion_summaries(), mode
+                )
+
+                self.assertEqual(errors, [])
+                self.assertTrue(report["complete_paper_grid"])
+                self.assertTrue(report["enforced_for_this_mode"])
+                self.assertEqual(report["summary"]["enforced_count"], 19)
+                self.assertEqual(report["summary"]["enforced_failed"], 0)
+                self.assertEqual(report["summary"]["required_pattern_count"], 19)
+                self.assertEqual(report["summary"]["required_pattern_failed"], 0)
+                self.assertTrue(
+                    report["summary"]["all_enforced_checks_passed"]
+                )
+                self.assertEqual(report["summary"]["informational_count"], 6)
+                self.assertEqual(report["summary"]["informational_passed"], 4)
+                crossover = [
+                    check
+                    for check in report["checks"]
+                    if check["category"] == "timing_crossover"
+                ]
+                self.assertEqual([check["nodes"] for check in crossover], [500, 600])
+                self.assertTrue(all(not check["enforced"] for check in crossover))
+                self.assertTrue(all(not check["passed"] for check in crossover))
+
+    def test_each_robust_conclusion_failure_is_enforced(self) -> None:
+        mutations = (
+            ((200, "basic"), "iterations_mean", 250.0, "basic_iterations_less_than_bfs"),
+            ((200, "milp"), "iterations_mean", 250.0, "milp_iterations_less_than_bfs"),
+            ((500, "bfs"), "total_time_mean", 350.0, "bfs_total_time_less_than_basic"),
+            ((500, "milp"), "total_time_mean", 350.0, "milp_total_time_less_than_basic"),
+        )
+        for key, field, value, check_id in mutations:
+            with self.subTest(check_id=check_id):
+                summaries = self._conclusion_summaries()
+                row = next(
+                    row
+                    for row in summaries
+                    if (row["nodes"], row["method"]) == key
+                )
+                row[field] = value
+
+                report, errors = section_3_2.evaluate_conclusion_consistency(
+                    summaries, "full"
+                )
+
+                check = next(
+                    check
+                    for check in report["checks"]
+                    if check["id"] == check_id and check["nodes"] == key[0]
+                )
+                self.assertTrue(check["enforced"])
+                self.assertFalse(check["passed"])
+                self.assertTrue(errors)
+                self.assertFalse(
+                    report["summary"]["all_enforced_checks_passed"]
+                )
+
+    def test_n300_n400_runtime_relations_are_informational(self) -> None:
+        summaries = self._conclusion_summaries()
+        for row in summaries:
+            if row["nodes"] in (300, 400) and row["method"] in ("bfs", "milp"):
+                row["total_time_mean"] = 350.0
+
+        report, errors = section_3_2.evaluate_conclusion_consistency(
+            summaries, "full"
+        )
+
+        self.assertEqual(errors, [])
+        early_runtime = [
+            check
+            for check in report["checks"]
+            if check["nodes"] in (300, 400)
+            and check["category"] == "scalability_pattern"
+        ]
+        self.assertEqual(len(early_runtime), 4)
+        self.assertTrue(all(check["informational"] for check in early_runtime))
+        self.assertTrue(all(not check["enforced"] for check in early_runtime))
+        self.assertTrue(all(not check["passed"] for check in early_runtime))
+        self.assertTrue(report["summary"]["all_enforced_checks_passed"])
+
+    def test_archived_grid_records_n400_exception_without_failing(self) -> None:
+        summaries = [
+            {
+                "nodes": nodes,
+                "method": method,
+                "n_runs": 10,
+                **reference,
+            }
+            for (nodes, method), reference in section_3_2.REFERENCE_MEANS.items()
+        ]
+
+        report, errors = section_3_2.evaluate_conclusion_consistency(
+            summaries, "archived"
+        )
+
+        self.assertEqual(errors, [])
+        self.assertTrue(report["complete_paper_grid"])
+        self.assertFalse(report["enforced_for_this_mode"])
+        self.assertEqual(report["summary"]["required_pattern_failed"], 0)
+        n400_runtime = [
+            check
+            for check in report["checks"]
+            if check["nodes"] == 400
+            and check["category"] == "scalability_pattern"
+        ]
+        self.assertEqual(len(n400_runtime), 2)
+        self.assertTrue(all(not check["passed"] for check in n400_runtime))
+        self.assertTrue(all(not check["enforced"] for check in n400_runtime))
+        self.assertTrue(all(check["informational"] for check in n400_runtime))
+
+    def test_reference_report_records_conclusion_checks(self) -> None:
+        comparison, errors = section_3_2.compare_reference(
+            self._conclusion_summaries(), "full"
+        )
+
+        self.assertEqual(errors, [])
+        self.assertTrue(
+            comparison["conclusion_consistency"]["summary"]
+            ["all_enforced_checks_passed"]
+        )
+
 
 class Section32SeedContractTests(unittest.TestCase):
     def test_smoke_and_full_commands_use_exact_seed_grids(self) -> None:
@@ -298,14 +531,30 @@ class Section32SeedContractTests(unittest.TestCase):
         _, grid_errors = section_3_2.validate_grid(rows, [metadata], "parse")
         self.assertTrue(any("non-paper jobs" in error for error in grid_errors))
 
-    def test_full_rejects_missing_archive_before_creating_output(self) -> None:
+    def test_full_missing_archive_reaches_job_layer_and_records_skip(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             output = root / "output"
             missing_archive = root / "missing-experiments-logs.zip"
 
-            with self.assertRaisesRegex(SystemExit, "Full mode requires"):
-                section_3_2.main(
+            def fake_run_jobs(jobs, *, log_root, **_):
+                _write_full_grid_logs(log_root)
+                return [
+                    JobResult(
+                        name=job.name,
+                        command=job.command,
+                        log_path=str(log_root / f"{job.name}.log"),
+                        returncode=0,
+                        elapsed_seconds=0.0,
+                        skipped=False,
+                    )
+                    for job in jobs
+                ]
+
+            with mock.patch.object(
+                section_3_2, "run_jobs", side_effect=fake_run_jobs
+            ) as run_jobs:
+                returncode = section_3_2.main(
                     (
                         "--mode",
                         "full",
@@ -317,7 +566,72 @@ class Section32SeedContractTests(unittest.TestCase):
                     )
                 )
 
-            self.assertFalse(output.exists())
+            self.assertEqual(returncode, 0)
+            run_jobs.assert_called_once()
+            jobs = run_jobs.call_args.args[0]
+            self.assertEqual(len(jobs), 50)
+            observed = {
+                (
+                    int(job.command[job.command.index("--random") + 1]),
+                    int(job.command[job.command.index("--seed") + 1]),
+                )
+                for job in jobs
+            }
+            self.assertEqual(
+                observed,
+                {
+                    (nodes, seed)
+                    for nodes in section_3_2.PAPER_NODES
+                    for seed in section_3_2.PAPER_SEEDS
+                },
+            )
+
+            mode_output = output / "full"
+            raw = json.loads(
+                (mode_output / "raw_archive_comparison.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(raw["status"], "skipped")
+            self.assertFalse(raw["required"])
+            self.assertFalse(raw["applied"])
+            self.assertEqual(
+                raw["reason_code"],
+                section_3_2.ARCHIVE_OPTIONAL_SKIP_REASON,
+            )
+            self.assertEqual(raw["validation_errors"], [])
+
+            validation = json.loads(
+                (mode_output / "validation.json").read_text(encoding="utf-8")
+            )
+            self.assertTrue(validation["valid"])
+            self.assertEqual(validation["errors"], [])
+            self.assertTrue(validation["paper_settings"]["all_match"])
+            raw_reference = validation["raw_archive_reference"]
+            self.assertTrue(raw_reference["applicable"])
+            self.assertFalse(raw_reference["required"])
+            self.assertFalse(raw_reference["applied"])
+            self.assertEqual(raw_reference["status"], "skipped")
+            self.assertEqual(raw_reference["error_count"], 0)
+            self.assertFalse(
+                any("archive" in error.lower() for error in validation["errors"])
+            )
+
+            provenance = json.loads(
+                (mode_output / "provenance.json").read_text(encoding="utf-8")
+            )
+            self.assertFalse(
+                any(
+                    Path(record["path"]) == missing_archive.resolve()
+                    for record in provenance["inputs"]
+                )
+            )
+            self.assertTrue(
+                any(
+                    note.startswith(section_3_2.ARCHIVE_OPTIONAL_SKIP_REASON)
+                    for note in provenance["notes"]
+                )
+            )
 
     def test_full_rejects_invalid_archive_before_creating_output(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -393,6 +707,46 @@ def _raw_archive_grid() -> list[dict[str, object]]:
                 partition = float(ordinal % 7)
                 admm_time = float(ordinal * 2)
                 iterations, status = section_3_2.ARCHIVE_EXPECTED_OUTCOMES[key]
+                milp_metadata: dict[str, object | None] = {
+                    field: None for field in section_3_2.MILP_METADATA_FIELDS
+                }
+                if method == "milp":
+                    fingerprint = (
+                        section_3_2.ARCHIVE_MILP_PARTITION_FINGERPRINTS[
+                            (nodes, seed)
+                        ]
+                    )
+                    time_limit = (
+                        nodes,
+                        seed,
+                    ) in section_3_2.ARCHIVE_MILP_TIME_LIMIT_PAIRS
+                    milp_metadata.update(
+                        {
+                            "milp_metadata_available": True,
+                            "milp_source_nodes": nodes,
+                            "milp_source_arcs": section_3_2.PAPER_ARCS,
+                            "milp_source_seed": seed,
+                            "milp_solve_status": (
+                                "Time limit reached"
+                                if time_limit
+                                else "Optimal"
+                            ),
+                            "milp_time_limit": time_limit,
+                            "milp_primal_bound": 10.0,
+                            "milp_dual_bound": 9.0,
+                            "milp_gap_percent": 1.0,
+                            "milp_solution_status": "feasible",
+                            "milp_solution_feasible": True,
+                            "milp_partition_nodes": fingerprint[0],
+                            "milp_partition_left": fingerprint[1],
+                            "milp_partition_right": fingerprint[2],
+                            "milp_partition_edges": fingerprint[3],
+                            "milp_partition_fingerprint": ":".join(
+                                str(value) for value in fingerprint
+                            ),
+                            "milp_partition_valid": True,
+                        }
+                    )
                 rows.append(
                     {
                         "scale_folder": scale_folder,
@@ -407,6 +761,7 @@ def _raw_archive_grid() -> list[dict[str, object]]:
                         "total_time_sec": partition + admm_time,
                         "termination_status": status,
                         "iterations": iterations,
+                        **milp_metadata,
                         "stdout_log": (
                             f"/retained/3-2-networkflow/{scale_folder}/"
                             f"{run_id}/stdout.log"
@@ -431,6 +786,7 @@ def _write_archive_zip(
     rows: list[dict[str, object]],
     *,
     command_overrides: dict[tuple[int, int], str] | None = None,
+    stdout_overrides: dict[tuple[int, int], str] | None = None,
 ) -> None:
     stream = io.StringIO()
     fields = (
@@ -487,7 +843,51 @@ def _write_archive_zip(
                 f"experiments_logs/3-2-networkflow/{scale_folder}/{run_id}"
             )
             archive.writestr(f"{prefix}/cmd", command)
-            archive.writestr(f"{prefix}/stdout.log", "retained test fixture\n")
+            stdout = _archive_milp_stdout(nodes, seed)
+            if stdout_overrides and (nodes, seed) in stdout_overrides:
+                stdout = stdout_overrides[(nodes, seed)]
+            archive.writestr(f"{prefix}/stdout.log", stdout)
+
+
+def _archive_milp_stdout(
+    nodes: int,
+    seed: int,
+    *,
+    solve_status: str | None = None,
+    solution_status: str = "feasible",
+    fingerprint: tuple[int, int, int, int] | None = None,
+) -> str:
+    if solve_status is None:
+        solve_status = (
+            "Time limit reached"
+            if (nodes, seed) in section_3_2.ARCHIVE_MILP_TIME_LIMIT_PAIRS
+            else "Optimal"
+        )
+    if fingerprint is None:
+        fingerprint = section_3_2.ARCHIVE_MILP_PARTITION_FINGERPRINTS[
+            (nodes, seed)
+        ]
+    iterations, status = section_3_2.ARCHIVE_EXPECTED_OUTCOMES[
+        (nodes, seed, "milp")
+    ]
+    return "\n".join(
+        (
+            f"Generating random instance: nodes={nodes} arcs=2000",
+            f" seed = {seed}",
+            _method_block(
+                "milp",
+                partition_time=60.0,
+                initialization_time=0.1,
+                admm_time=1.0,
+                iterations=(iterations,),
+                stop_iter=iterations,
+                status=status,
+                milp_solve_status=solve_status,
+                milp_solution_status=solution_status,
+                milp_fingerprint=fingerprint,
+            ),
+        )
+    )
 
 
 def _paper_log_text(nodes: int, seed: int) -> str:
@@ -509,10 +909,31 @@ def _paper_log_text(nodes: int, seed: int) -> str:
                 method,
                 partition_time=float(index),
                 initialization_time=index + 0.5,
-                admm_time=index + 2.0,
+                admm_time=(
+                    10.0
+                    if nodes >= 300 and method == "basic"
+                    else index + 2.0
+                ),
                 iterations=(iterations,),
                 stop_iter=iterations,
                 status=status,
+                milp_solve_status=(
+                    (
+                        "Time limit reached"
+                        if (nodes, seed)
+                        in section_3_2.ARCHIVE_MILP_TIME_LIMIT_PAIRS
+                        else "Optimal"
+                    )
+                    if method == "milp"
+                    else None
+                ),
+                milp_fingerprint=(
+                    section_3_2.ARCHIVE_MILP_PARTITION_FINGERPRINTS[
+                        (nodes, seed)
+                    ]
+                    if method == "milp"
+                    else None
+                ),
             ).rstrip("\n")
         )
     return "\n".join(text) + "\n"
@@ -547,13 +968,17 @@ class Section32RawArchiveValidationTests(unittest.TestCase):
         pattern: str,
         *,
         command_overrides: dict[tuple[int, int], str] | None = None,
+        stdout_overrides: dict[tuple[int, int], str] | None = None,
     ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             archive = root / "experiments_logs.zip"
             output = root / "output"
             _write_archive_zip(
-                archive, rows, command_overrides=command_overrides
+                archive,
+                rows,
+                command_overrides=command_overrides,
+                stdout_overrides=stdout_overrides,
             )
             with mock.patch.object(
                 section_3_2,
@@ -587,8 +1012,8 @@ class Section32RawArchiveValidationTests(unittest.TestCase):
         self.assertTrue(any("iterations" in error for error in errors))
         self.assertTrue(any("termination_status" in error for error in errors))
         self.assertEqual(comparison["summary"]["compared_keys"], 150)
-        self.assertEqual(comparison["summary"]["stable_outcome_rows"], 149)
-        self.assertEqual(comparison["summary"]["enforced_outcome_checks"], 298)
+        self.assertEqual(comparison["summary"]["stable_outcome_rows"], 115)
+        self.assertEqual(comparison["summary"]["enforced_outcome_checks"], 230)
         self.assertEqual(comparison["summary"]["enforced_identity_checks"], 150)
         self.assertFalse(comparison["summary"]["all_required_checks_passed"])
 
@@ -617,8 +1042,19 @@ class Section32RawArchiveValidationTests(unittest.TestCase):
         errors = section_3_2.raw_archive_validation_errors(comparison)
 
         self.assertEqual(errors, [])
-        self.assertEqual(comparison["summary"]["censored_row_count"], 1)
-        censored = comparison["censored_rows"][0]
+        self.assertEqual(comparison["summary"]["censored_row_count"], 35)
+        self.assertEqual(comparison["summary"]["admm_censored_row_count"], 1)
+        self.assertEqual(
+            comparison["summary"]["milp_partition_censored_row_count"], 34
+        )
+        self.assertEqual(comparison["summary"]["partition_censored_row_count"], 34)
+        self.assertEqual(comparison["summary"]["censored_outcome_row_count"], 35)
+        censored = next(
+            item
+            for item in comparison["censored_rows"]
+            if (item["nodes"], item["seed"], item["method"])
+            == section_3_2.PAPER_CENSORED_KEY
+        )
         self.assertEqual(
             (censored["nodes"], censored["seed"], censored["method"]),
             section_3_2.PAPER_CENSORED_KEY,
@@ -632,6 +1068,140 @@ class Section32RawArchiveValidationTests(unittest.TestCase):
         self.assertEqual(len(outcome_checks), 2)
         self.assertTrue(all(not check["enforced"] for check in outcome_checks))
         self.assertTrue(comparison["summary"]["all_required_checks_passed"])
+
+    def test_uncensored_milp_outcome_mismatch_fails(self) -> None:
+        archived = _raw_archive_grid()
+        fresh = [dict(row) for row in archived]
+        row = _raw_row(fresh, (200, 1, "milp"))
+        row["iterations"] = int(row["iterations"]) + 1
+
+        comparison = section_3_2.build_raw_archive_comparison(fresh, archived)
+        errors = section_3_2.raw_archive_validation_errors(comparison)
+
+        self.assertTrue(any("/iterations" in error for error in errors))
+        self.assertFalse(comparison["summary"]["all_required_checks_passed"])
+
+    def test_censored_milp_outcome_mismatch_passes_but_is_reported(self) -> None:
+        archived = _raw_archive_grid()
+        fresh = [dict(row) for row in archived]
+        key = (400, 6, "milp")
+        row = _raw_row(fresh, key)
+        row["iterations"] = int(row["iterations"]) - 390
+        row["termination_status"] = "ADMM_TERMINATION_ITERATION_LIMIT"
+        row["milp_primal_bound"] = 9.5
+
+        comparison = section_3_2.build_raw_archive_comparison(fresh, archived)
+        errors = section_3_2.raw_archive_validation_errors(comparison)
+
+        self.assertEqual(errors, [])
+        censored = next(
+            item
+            for item in comparison["censored_rows"]
+            if (item["nodes"], item["seed"], item["method"]) == key
+        )
+        self.assertEqual(censored["censor_type"], "milp_partition_time_limit")
+        self.assertEqual(censored["archive_iterations"], 13107)
+        self.assertEqual(censored["observed_iterations"], 12717)
+        outcome_checks = [
+            check
+            for check in comparison["checks"]
+            if check["key"] == "nodes=400/seed=6/milp"
+            and check["field"] in {"iterations", "termination_status"}
+        ]
+        self.assertEqual(len(outcome_checks), 2)
+        self.assertTrue(all(not check["enforced"] for check in outcome_checks))
+        self.assertTrue(any(not check["passed"] for check in outcome_checks))
+        self.assertTrue(comparison["summary"]["all_required_checks_passed"])
+
+    def test_fresh_optimal_replacing_archived_partition_timeout_passes(self) -> None:
+        archived = _raw_archive_grid()
+        fresh = [dict(row) for row in archived]
+        row = _raw_row(fresh, (300, 4, "milp"))
+        row["milp_solve_status"] = "Optimal"
+        row["milp_time_limit"] = False
+
+        comparison = section_3_2.build_raw_archive_comparison(fresh, archived)
+        errors = section_3_2.raw_archive_validation_errors(comparison)
+
+        self.assertEqual(errors, [])
+        checks = [
+            check
+            for check in comparison["checks"]
+            if check["key"] == "nodes=300/seed=4/milp"
+            and check["field"] in {"milp_solve_status", "milp_time_limit"}
+        ]
+        self.assertEqual(len(checks), 2)
+        self.assertTrue(all(not check["enforced"] for check in checks))
+        self.assertTrue(all(not check["passed"] for check in checks))
+
+    def test_fresh_timeout_replacing_archive_optimal_partition_fails(self) -> None:
+        archived = _raw_archive_grid()
+        fresh = [dict(row) for row in archived]
+        row = _raw_row(fresh, (200, 1, "milp"))
+        row["milp_solve_status"] = "Time limit reached"
+        row["milp_time_limit"] = True
+
+        comparison = section_3_2.build_raw_archive_comparison(fresh, archived)
+        errors = section_3_2.raw_archive_validation_errors(comparison)
+
+        self.assertTrue(any("milp_solve_status" in error for error in errors))
+        self.assertTrue(any("milp_time_limit" in error for error in errors))
+        self.assertFalse(comparison["summary"]["all_required_checks_passed"])
+
+    def test_censored_partition_count_change_is_informational(self) -> None:
+        archived = _raw_archive_grid()
+        fresh = [dict(row) for row in archived]
+        row = _raw_row(fresh, (600, 3, "milp"))
+        row["milp_partition_nodes"] = 2514
+        row["milp_partition_left"] = 557
+        row["milp_partition_right"] = 1957
+        row["milp_partition_edges"] = 3914
+        row["milp_partition_fingerprint"] = "2514:557:1957:3914"
+        row["milp_partition_valid"] = True
+
+        comparison = section_3_2.build_raw_archive_comparison(fresh, archived)
+        errors = section_3_2.raw_archive_validation_errors(comparison)
+
+        self.assertEqual(errors, [])
+        check = next(
+            check
+            for check in comparison["checks"]
+            if check["key"] == "nodes=600/seed=3/milp"
+            and check["field"] == "milp_partition_fingerprint"
+        )
+        self.assertFalse(check["enforced"])
+        self.assertFalse(check["passed"])
+
+    def test_censored_milp_missing_or_infeasible_partition_fails(self) -> None:
+        for mutation in ("missing", "infeasible"):
+            with self.subTest(mutation=mutation):
+                archived = _raw_archive_grid()
+                fresh = [dict(row) for row in archived]
+                row = _raw_row(fresh, (500, 2, "milp"))
+                if mutation == "missing":
+                    row["milp_metadata_available"] = False
+                    row["milp_partition_fingerprint"] = None
+                    row["milp_partition_valid"] = False
+                else:
+                    row["milp_solution_status"] = "infeasible"
+                    row["milp_solution_feasible"] = False
+
+                comparison = section_3_2.build_raw_archive_comparison(
+                    fresh, archived
+                )
+                errors = section_3_2.raw_archive_validation_errors(comparison)
+
+                self.assertTrue(errors)
+                self.assertTrue(
+                    any(
+                        "milp_" in error
+                        or "partition" in error
+                        for error in errors
+                    )
+                )
+                self.assertFalse(
+                    comparison["summary"]["all_required_checks_passed"]
+                )
 
     def test_echoed_paper_setting_mismatch_fails_metadata_validation(self) -> None:
         parser_tests = Section32ParserTests()
@@ -692,6 +1262,34 @@ class Section32RawArchiveValidationTests(unittest.TestCase):
             _raw_archive_grid(),
             "archived command mismatch",
             command_overrides={(600, 9): command},
+        )
+
+    def test_full_preflight_rejects_wrong_archive_milp_censor_manifest(
+        self,
+    ) -> None:
+        pair = (400, 1)
+        stdout = _archive_milp_stdout(
+            *pair,
+            solve_status="Optimal",
+        )
+
+        self._assert_full_preflight_rejects(
+            _raw_archive_grid(),
+            "archive MILP censor manifest mismatch",
+            stdout_overrides={pair: stdout},
+        )
+
+    def test_full_preflight_rejects_swapped_archive_stdout_identity(self) -> None:
+        first = (400, 1)
+        second = (400, 7)
+
+        self._assert_full_preflight_rejects(
+            _raw_archive_grid(),
+            "archive stdout identity mismatch",
+            stdout_overrides={
+                first: _archive_milp_stdout(*second),
+                second: _archive_milp_stdout(*first),
+            },
         )
 
     def test_complete_grid_parse_records_archive_hash_and_raw_artifact(self) -> None:

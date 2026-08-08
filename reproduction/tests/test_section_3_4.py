@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import re
 import tempfile
@@ -216,7 +217,7 @@ def _archive_reference_grid() -> list[dict[str, object]]:
 
 
 def _write_archive_manifest_files(root: Path, *, skip_index: int | None = None) -> None:
-    for index, (batch, job_id, *_metadata) in enumerate(
+    for index, (batch, job_id, solver, number_nodes, seed) in enumerate(
         section_3_4_impl.ARCHIVE_PAPER_JOBS
     ):
         if index == skip_index:
@@ -224,6 +225,51 @@ def _write_archive_manifest_files(root: Path, *, skip_index: int | None = None) 
         path = root / batch / job_id / "stdout.log"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("", encoding="utf-8")
+        command = section_3_4_impl._expected_archive_command_tokens(
+            solver,
+            number_nodes,
+            seed,
+        )
+        (path.parent / "cmd").write_text(" ".join(command) + "\n", encoding="utf-8")
+
+
+def _archive_command_tokens() -> dict[tuple[str, str], tuple[str, ...]]:
+    return {
+        (batch, job_id): section_3_4_impl._expected_archive_command_tokens(
+            solver,
+            number_nodes,
+            seed,
+        )
+        for batch, job_id, solver, number_nodes, seed in (
+            section_3_4_impl.ARCHIVE_PAPER_JOBS
+        )
+    }
+
+
+def _qualitative_aggregate_grid() -> list[dict[str, object]]:
+    values = {
+        "basic": (100.0, 100.0, 0.0),
+        "bfs": (60.0, 70.0, 0.0),
+        "milp_0.01": (55.0, 85.0, 40.0),
+        "milp_0.05": (56.0, 82.0, 30.0),
+        "milp_0.1": (57.0, 79.0, 20.0),
+        "milp_0.2": (58.0, 76.0, 10.0),
+        "gnn": (62.0, 74.0, 5.0),
+    }
+    return [
+        {
+            "solver": solver,
+            "number_nodes": number_nodes,
+            "method": method,
+            "n_runs": len(section_3_4_impl.PAPER_SEEDS),
+            "mean_iterations": values[method][0],
+            "mean_total_time_seconds": values[method][1],
+            "mean_partition_time_seconds": values[method][2],
+        }
+        for solver in section_3_4.PAPER_SOLVERS
+        for number_nodes in section_3_4.PAPER_NODE_COUNTS
+        for method in section_3_4.PAPER_METHODS
+    ]
 
 
 class Section34ParserTests(unittest.TestCase):
@@ -456,6 +502,80 @@ class Section34AggregationTests(unittest.TestCase):
         self.assertEqual(len(validation["time_limit_rows"]), 1)
 
 
+class Section34ConclusionConsistencyTests(unittest.TestCase):
+    def test_complete_fresh_grid_enforces_only_robust_iteration_patterns(self) -> None:
+        report, errors = section_3_4_impl.evaluate_conclusion_consistency(
+            _qualitative_aggregate_grid(), "full"
+        )
+
+        self.assertEqual(errors, [])
+        self.assertTrue(report["complete_paper_grid"])
+        self.assertEqual(report["summary"]["check_count"], 90)
+        self.assertEqual(report["summary"]["enforced_count"], 12)
+        self.assertEqual(report["summary"]["enforced_passed"], 12)
+        self.assertEqual(report["summary"]["informational_count"], 78)
+        self.assertEqual(report["summary"]["informational_passed"], 78)
+
+    def test_bfs_iteration_regression_is_enforced_and_reported(self) -> None:
+        aggregate = _qualitative_aggregate_grid()
+        row = next(
+            row
+            for row in aggregate
+            if row["solver"] == "original"
+            and row["number_nodes"] == 50
+            and row["method"] == "bfs"
+        )
+        row["mean_iterations"] = 101.0
+        report, errors = section_3_4_impl.evaluate_conclusion_consistency(
+            aggregate, "full"
+        )
+        comparison = {
+            "checks": [],
+            "missing_reference_keys": [],
+            "conclusion_consistency": report,
+        }
+
+        self.assertEqual(report["summary"]["enforced_failed"], 1)
+        self.assertEqual(len(errors), 1)
+        validation_errors = section_3_4_impl.reference_validation_errors(
+            comparison,
+            mode="full",
+            selected_methods=section_3_4.PAPER_METHODS,
+        )
+        self.assertTrue(any("Conclusion pattern mismatch" in error for error in validation_errors))
+
+    def test_milp_and_wall_time_differences_remain_informational(self) -> None:
+        aggregate = _qualitative_aggregate_grid()
+        row = next(
+            row
+            for row in aggregate
+            if row["solver"] == "doubly"
+            and row["number_nodes"] == 200
+            and row["method"] == "milp_0.2"
+        )
+        row["mean_iterations"] = 110.0
+        row["mean_total_time_seconds"] = 120.0
+        row["mean_partition_time_seconds"] = 50.0
+
+        report, errors = section_3_4_impl.evaluate_conclusion_consistency(
+            aggregate, "full"
+        )
+
+        self.assertEqual(errors, [])
+        self.assertEqual(report["summary"]["enforced_failed"], 0)
+        self.assertLess(report["summary"]["informational_passed"], 78)
+
+    def test_partial_grid_records_no_conclusion_checks(self) -> None:
+        report, errors = section_3_4_impl.evaluate_conclusion_consistency(
+            _qualitative_aggregate_grid()[:1], "parse"
+        )
+
+        self.assertEqual(errors, [])
+        self.assertFalse(report["complete_paper_grid"])
+        self.assertFalse(report["enforced_for_this_mode"])
+        self.assertEqual(report["summary"]["check_count"], 0)
+
+
 class Section34SeedContractTests(unittest.TestCase):
     def test_smoke_and_full_commands_use_exact_seed_grids(self) -> None:
         parser = section_3_4_impl.build_parser()
@@ -464,7 +584,6 @@ class Section34SeedContractTests(unittest.TestCase):
         smoke = section_3_4_impl.build_jobs(smoke_args, smoke_methods)
         with tempfile.TemporaryDirectory() as temporary:
             archive = Path(temporary) / "archive.zip"
-            archive.write_bytes(b"")
             full_args = parser.parse_args(
                 ("--mode", "full", "--archive", str(archive))
             )
@@ -497,7 +616,7 @@ class Section34SeedContractTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, "paper configuration"):
             section_3_4_impl.validate_arguments(args)
 
-    def test_full_requires_archive_for_raw_comparison(self) -> None:
+    def test_full_allows_missing_archive_and_keeps_paper_job_grid(self) -> None:
         parser = section_3_4_impl.build_parser()
         with tempfile.TemporaryDirectory() as temporary:
             missing = Path(temporary) / "missing.zip"
@@ -505,13 +624,34 @@ class Section34SeedContractTests(unittest.TestCase):
                 ("--mode", "full", "--archive", str(missing))
             )
 
-            with self.assertRaisesRegex(SystemExit, "raw archive consistency check"):
+            methods = section_3_4_impl.validate_arguments(args)
+            jobs = section_3_4_impl.build_jobs(args, methods)
+
+        self.assertEqual(methods, section_3_4.PAPER_METHODS)
+        self.assertEqual(len(jobs), 30)
+        self.assertTrue(all(job.command[3] == "16" for job in jobs))
+        self.assertTrue(
+            all(
+                job.command[6:12]
+                == ("500", "250", job.command[8], "10.0", "100000", "1000")
+                for job in jobs
+            )
+        )
+
+    def test_archived_mode_still_requires_archive(self) -> None:
+        parser = section_3_4_impl.build_parser()
+        with tempfile.TemporaryDirectory() as temporary:
+            missing = Path(temporary) / "missing.zip"
+            args = parser.parse_args(
+                ("--mode", "archived", "--archive", str(missing))
+            )
+
+            with self.assertRaisesRegex(SystemExit, "Archive not found"):
                 section_3_4_impl.validate_arguments(args)
 
     def test_full_rejects_nonpaper_thread_count_before_running(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             archive = Path(temporary) / "archive.zip"
-            archive.write_bytes(b"")
             with patch.object(section_3_4_impl, "prepare_mode_output") as prepare:
                 with patch.object(section_3_4_impl, "run_jobs") as run_jobs:
                     with self.assertRaisesRegex(SystemExit, "--threads=8"):
@@ -667,19 +807,95 @@ class Section34RawArchiveComparisonTests(unittest.TestCase):
         self.assertTrue(any(not check["passed"] for check in timing_checks))
         self.assertTrue(all(not check["enforced"] for check in timing_checks))
 
-    def test_stable_structure_and_outcome_drift_are_enforced(self) -> None:
+    def test_stable_structure_drift_remains_enforced(self) -> None:
         archived = _raw_full_grid()
         fresh = [dict(row) for row in archived]
         bfs = _raw_row(fresh, ("original", 50, 111, "bfs"))
         bfs["graph_edges"] = int(bfs["graph_edges"]) + 1
-        bfs["iterations"] = int(bfs["iterations"]) + 1
 
         comparison = section_3_4_impl.build_raw_archive_comparison(fresh, archived)
         errors = section_3_4_impl.raw_archive_validation_errors(comparison)
 
         self.assertTrue(any("graph_edges" in error for error in errors))
-        self.assertTrue(any("iterations" in error for error in errors))
+        self.assertTrue(comparison["summary"]["all_stable_iterations_match"])
         self.assertFalse(comparison["summary"]["all_enforced_checks_passed"])
+
+    def test_bounded_stable_iteration_variance_passes_with_warning(self) -> None:
+        archived = _raw_full_grid()
+        fresh = [dict(row) for row in archived]
+        key = ("original", 50, 111, "bfs")
+        archived_row = _raw_row(archived, key)
+        fresh_row = _raw_row(fresh, key)
+        archived_row["iterations"] = 100
+        fresh_row["iterations"] = 105
+
+        comparison = section_3_4_impl.build_raw_archive_comparison(fresh, archived)
+
+        self.assertEqual(section_3_4_impl.raw_archive_validation_errors(comparison), [])
+        summary = comparison["summary"]
+        self.assertFalse(summary["all_stable_iterations_match"])
+        self.assertTrue(summary["all_stable_iterations_within_tolerance"])
+        self.assertEqual(summary["bounded_iteration_variance_row_count"], 1)
+        self.assertEqual(summary["warning_count"], 1)
+        self.assertTrue(comparison["warnings"])
+        iteration_check = next(
+            check
+            for check in comparison["checks"]
+            if check["key"] == "original/N=50/seed=111/bfs"
+            and check["field"] == "iterations"
+        )
+        self.assertTrue(iteration_check["enforced"])
+        self.assertTrue(iteration_check["passed"])
+        self.assertEqual(iteration_check["allowed_absolute_difference"], 5)
+
+        validation: dict[str, object] = {"errors": [], "warnings": []}
+        section_3_4_impl._merge_raw_archive_validation(validation, comparison)
+        self.assertEqual(validation["errors"], [])
+        self.assertEqual(validation["warnings"], comparison["warnings"])
+        self.assertEqual(
+            validation["raw_archive_summary"],
+            comparison["summary"],
+        )
+
+    def test_excessive_stable_iteration_variance_is_rejected(self) -> None:
+        archived = _raw_full_grid()
+        fresh = [dict(row) for row in archived]
+        key = ("original", 50, 111, "bfs")
+        archived_row = _raw_row(archived, key)
+        fresh_row = _raw_row(fresh, key)
+        archived_row["iterations"] = 100
+        fresh_row["iterations"] = 106
+
+        comparison = section_3_4_impl.build_raw_archive_comparison(fresh, archived)
+        errors = section_3_4_impl.raw_archive_validation_errors(comparison)
+
+        self.assertTrue(any("machine-variance bound" in error for error in errors))
+        self.assertFalse(
+            comparison["summary"]["all_stable_iterations_within_tolerance"]
+        )
+
+    def test_stable_status_mismatch_remains_exact(self) -> None:
+        archived = _raw_full_grid()
+        fresh = [dict(row) for row in archived]
+        row = _raw_row(fresh, ("original", 50, 111, "bfs"))
+        row["admm_status"] = "ADMM_TERMINATION_FAILED"
+
+        comparison = section_3_4_impl.build_raw_archive_comparison(fresh, archived)
+        errors = section_3_4_impl.raw_archive_validation_errors(comparison)
+
+        self.assertTrue(any("admm_status" in error for error in errors))
+        self.assertFalse(comparison["summary"]["all_stable_statuses_match"])
+
+    def test_configuration_drift_remains_exact(self) -> None:
+        archived = _raw_full_grid()
+        fresh = [dict(row) for row in archived]
+        row = _raw_row(fresh, ("original", 50, 111, "bfs"))
+        row["threads"] = 8
+
+        comparison = section_3_4_impl.build_raw_archive_comparison(fresh, archived)
+        errors = section_3_4_impl.raw_archive_validation_errors(comparison)
+
+        self.assertTrue(any("/threads" in error for error in errors))
 
     def test_either_milp_time_limit_censors_partition_and_downstream_outcome(self) -> None:
         archived = _raw_full_grid()
@@ -725,16 +941,92 @@ class Section34RawArchiveComparisonTests(unittest.TestCase):
         errors = section_3_4_impl.raw_archive_validation_errors(comparison)
         self.assertTrue(any("graph_edges" in error for error in errors))
 
-    def test_unexpected_admm_time_limit_outside_paper_censor_is_enforced(self) -> None:
+    def test_fresh_only_admm_cutoff_requires_near_cap_archive_time(self) -> None:
         archived = _raw_full_grid()
         fresh = [dict(row) for row in archived]
         row = _raw_row(fresh, ("original", 50, 111, "bfs"))
-        row["admm_status"] = "ADMM_TERMINATION_TIME_LIMIT"
+        row["admm_status"] = section_3_4_impl.ADMM_TIME_LIMIT_STATUS
+        row["admm_time_seconds"] = section_3_4_impl.PAPER_ADMM_TIME_LIMIT
 
         comparison = section_3_4_impl.build_raw_archive_comparison(fresh, archived)
         errors = section_3_4_impl.raw_archive_validation_errors(comparison)
 
-        self.assertTrue(any("admm_status" in error for error in errors))
+        self.assertTrue(
+            any("archive_admm_time_near_cap" in error for error in errors)
+        )
+        self.assertEqual(
+            comparison["summary"]["fresh_only_integrity_failed_count"], 1
+        )
+
+    def test_fresh_only_admm_cutoff_requires_near_cap_fresh_time(self) -> None:
+        archived = _raw_full_grid()
+        fresh = [dict(row) for row in archived]
+        key = ("original", 50, 111, "bfs")
+        archived_row = _raw_row(archived, key)
+        fresh_row = _raw_row(fresh, key)
+        archived_row["admm_time_seconds"] = 7_076.0
+        fresh_row["admm_status"] = section_3_4_impl.ADMM_TIME_LIMIT_STATUS
+        fresh_row["admm_time_seconds"] = 100.0
+
+        comparison = section_3_4_impl.build_raw_archive_comparison(fresh, archived)
+        errors = section_3_4_impl.raw_archive_validation_errors(comparison)
+
+        self.assertTrue(
+            any("fresh_admm_time_near_cap" in error for error in errors)
+        )
+
+    def test_fresh_only_near_cap_admm_cutoff_is_bounded_and_reported(self) -> None:
+        archived = _raw_full_grid()
+        fresh = [dict(row) for row in archived]
+        key = ("original", 50, 111, "bfs")
+        archived_row = _raw_row(archived, key)
+        fresh_row = _raw_row(fresh, key)
+        archived_row["admm_time_seconds"] = 7_076.0
+        archived_row["iterations"] = 100
+        fresh_row["admm_status"] = section_3_4_impl.ADMM_TIME_LIMIT_STATUS
+        fresh_row["admm_time_seconds"] = section_3_4_impl.PAPER_ADMM_TIME_LIMIT
+        fresh_row["iterations"] = 95
+
+        comparison = section_3_4_impl.build_raw_archive_comparison(fresh, archived)
+
+        self.assertEqual(section_3_4_impl.raw_archive_validation_errors(comparison), [])
+        summary = comparison["summary"]
+        self.assertEqual(summary["fresh_only_admm_time_censored_row_count"], 1)
+        self.assertEqual(summary["fresh_only_integrity_checked_count"], 1)
+        self.assertEqual(summary["fresh_only_integrity_passed_count"], 1)
+        self.assertEqual(summary["fresh_only_integrity_failed_count"], 0)
+        censored = next(
+            row
+            for row in comparison["censored_rows"]
+            if row["key"] == "original/N=50/seed=111/bfs"
+        )
+        self.assertEqual(
+            censored["classification"],
+            "fresh_only_admm_time_censored_near_cap",
+        )
+        self.assertTrue(censored["structure_equality_enforced"])
+        self.assertTrue(censored["fresh_only_integrity_passed"])
+        self.assertTrue(comparison["warnings"])
+
+    def test_fresh_only_admm_cutoff_rejects_over_ten_percent_drift(self) -> None:
+        archived = _raw_full_grid()
+        fresh = [dict(row) for row in archived]
+        key = ("original", 50, 111, "bfs")
+        archived_row = _raw_row(archived, key)
+        fresh_row = _raw_row(fresh, key)
+        archived_row["admm_time_seconds"] = 7_076.0
+        archived_row["iterations"] = 100
+        fresh_row["admm_status"] = section_3_4_impl.ADMM_TIME_LIMIT_STATUS
+        fresh_row["admm_time_seconds"] = section_3_4_impl.PAPER_ADMM_TIME_LIMIT
+        fresh_row["iterations"] = 89
+
+        comparison = section_3_4_impl.build_raw_archive_comparison(fresh, archived)
+        errors = section_3_4_impl.raw_archive_validation_errors(comparison)
+
+        self.assertTrue(any("exceeds 10%" in error for error in errors))
+        self.assertEqual(
+            comparison["summary"]["fresh_only_integrity_failed_count"], 1
+        )
 
     def test_original_and_doubly_must_share_seeded_basic_instance(self) -> None:
         archived = _raw_full_grid()
@@ -789,17 +1081,88 @@ class Section34ArchiveManifestTests(unittest.TestCase):
 
     def test_job_manifest_ties_each_seed_to_its_scheduler_job(self) -> None:
         records = _archive_reference_grid()
-        report = section_3_4_impl.validate_archive_job_manifest(records)
+        commands = _archive_command_tokens()
+        report = section_3_4_impl.validate_archive_job_manifest(records, commands)
         self.assertEqual(report["status"], "passed")
         self.assertEqual(report["observed_job_count"], 30)
+        self.assertEqual(report["observed_command_count"], 30)
+        self.assertTrue(all(check["command_match"] for check in report["checks"]))
 
         first_job = section_3_4_impl.ARCHIVE_PAPER_JOBS[0][:2]
         for record in records:
             if (record["archive_batch"], record["run_id"]) == first_job:
                 record["seed"] = 999
-        report = section_3_4_impl.validate_archive_job_manifest(records)
+        report = section_3_4_impl.validate_archive_job_manifest(records, commands)
         self.assertEqual(report["status"], "failed")
         self.assertTrue(any("51362366" in error for error in report["errors"]))
+
+    def test_archive_command_files_are_normalized_for_all_paper_jobs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _write_archive_manifest_files(root)
+
+            commands, errors = section_3_4_impl.read_archive_paper_commands(root)
+
+        self.assertEqual(errors, [])
+        self.assertEqual(commands, _archive_command_tokens())
+        self.assertEqual(len(commands), 30)
+
+    def test_archive_command_reader_rejects_invalid_utf8(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _write_archive_manifest_files(root)
+            batch, job_id, *_metadata = section_3_4_impl.ARCHIVE_PAPER_JOBS[0]
+            path = root / batch / job_id / "cmd"
+            path.write_bytes(path.read_bytes().replace(b"bash", b"ba\xffsh", 1))
+
+            commands, errors = section_3_4_impl.read_archive_paper_commands(root)
+
+        self.assertNotIn((batch, job_id), commands)
+        self.assertTrue(
+            any(
+                f"{batch}/{job_id}/cmd is not valid UTF-8" in error
+                for error in errors
+            )
+        )
+
+    def test_job_manifest_rejects_command_configuration_mutations(self) -> None:
+        records = _archive_reference_grid()
+        expected = _archive_command_tokens()
+        first_job = section_3_4_impl.ARCHIVE_PAPER_JOBS[0][:2]
+        second_job = section_3_4_impl.ARCHIVE_PAPER_JOBS[1][:2]
+
+        wrong_thread = dict(expected)
+        wrong_thread[first_job] = (
+            *expected[first_job][:3],
+            "8",
+            *expected[first_job][4:],
+        )
+        extra_argument = dict(expected)
+        extra_argument[first_job] = (*expected[first_job], "0.2")
+        swapped_seeds = dict(expected)
+        swapped_seeds[first_job], swapped_seeds[second_job] = (
+            swapped_seeds[second_job],
+            swapped_seeds[first_job],
+        )
+
+        for label, commands in (
+            ("wrong thread", wrong_thread),
+            ("extra optional argument", extra_argument),
+            ("swapped job commands", swapped_seeds),
+        ):
+            with self.subTest(label=label):
+                report = section_3_4_impl.validate_archive_job_manifest(
+                    records,
+                    commands,
+                )
+                self.assertEqual(report["status"], "failed")
+                self.assertTrue(
+                    any(
+                        f"{first_job[0]}/{first_job[1]}" in error
+                        and "command mismatch" in error.lower()
+                        for error in report["errors"]
+                    )
+                )
 
     def test_exact_archive_censor_status_manifest_is_enforced(self) -> None:
         records = _archive_reference_grid()
@@ -849,19 +1212,26 @@ class Section34ArchiveManifestTests(unittest.TestCase):
 
     def test_canonical_manifest_rejects_stable_iteration_mutation(self) -> None:
         records = _archive_reference_grid()
-        baseline = section_3_4_impl.build_archive_canonical_manifest(records)
+        commands = _archive_command_tokens()
+        baseline = section_3_4_impl.build_archive_canonical_manifest(records, commands)
         expected_digest = str(baseline["observed_sha256"])
         with patch.object(
             section_3_4_impl,
             "ARCHIVE_PAPER_CANONICAL_SHA256",
             expected_digest,
         ):
-            accepted = section_3_4_impl.build_archive_canonical_manifest(records)
+            accepted = section_3_4_impl.build_archive_canonical_manifest(
+                records,
+                commands,
+            )
             basic = _raw_row(records, ("original", 50, 111, "basic"))
             basic["iterations"] = int(basic["iterations"]) + 1
-            mutated = section_3_4_impl.build_archive_canonical_manifest(records)
+            mutated = section_3_4_impl.build_archive_canonical_manifest(
+                records,
+                commands,
+            )
             _, _, _, preflight = (
-                section_3_4_impl.build_archive_reference_validation(records)
+                section_3_4_impl.build_archive_reference_validation(records, commands)
             )
 
         self.assertEqual(accepted["status"], "passed")
@@ -880,7 +1250,8 @@ class Section34ArchiveManifestTests(unittest.TestCase):
 
     def test_canonical_manifest_binds_rows_to_archive_job_path(self) -> None:
         records = _archive_reference_grid()
-        baseline = section_3_4_impl.build_archive_canonical_manifest(records)
+        commands = _archive_command_tokens()
+        baseline = section_3_4_impl.build_archive_canonical_manifest(records, commands)
         expected_digest = str(baseline["observed_sha256"])
         first_job = section_3_4_impl.ARCHIVE_PAPER_JOBS[0][:2]
         first_record = next(
@@ -905,8 +1276,11 @@ class Section34ArchiveManifestTests(unittest.TestCase):
             "ARCHIVE_PAPER_CANONICAL_SHA256",
             expected_digest,
         ):
-            mutated = section_3_4_impl.build_archive_canonical_manifest(records)
-        job_report = section_3_4_impl.validate_archive_job_manifest(records)
+            mutated = section_3_4_impl.build_archive_canonical_manifest(
+                records,
+                commands,
+            )
+        job_report = section_3_4_impl.validate_archive_job_manifest(records, commands)
 
         self.assertEqual(mutated["status"], "failed")
         self.assertEqual(job_report["status"], "failed")
@@ -914,6 +1288,38 @@ class Section34ArchiveManifestTests(unittest.TestCase):
         self.assertEqual(job_report["unexpected_jobs"], [])
         self.assertTrue(any(first_job[1] in error for error in job_report["errors"]))
         self.assertTrue(any(second_job[1] in error for error in job_report["errors"]))
+
+    def test_canonical_manifest_digest_includes_command_tokens(self) -> None:
+        records = _archive_reference_grid()
+        commands = _archive_command_tokens()
+        baseline = section_3_4_impl.build_archive_canonical_manifest(records, commands)
+        expected_digest = str(baseline["observed_sha256"])
+        first_job = section_3_4_impl.ARCHIVE_PAPER_JOBS[0][:2]
+        mutated_commands = dict(commands)
+        mutated_commands[first_job] = (
+            *mutated_commands[first_job][:-1],
+            "999",
+        )
+
+        with patch.object(
+            section_3_4_impl,
+            "ARCHIVE_PAPER_CANONICAL_SHA256",
+            expected_digest,
+        ):
+            accepted = section_3_4_impl.build_archive_canonical_manifest(
+                records,
+                commands,
+            )
+            mutated = section_3_4_impl.build_archive_canonical_manifest(
+                records,
+                mutated_commands,
+            )
+
+        self.assertEqual(accepted["status"], "passed")
+        self.assertEqual(accepted["command_count"], 30)
+        self.assertEqual(len(accepted["commands"]), 30)
+        self.assertEqual(mutated["status"], "failed")
+        self.assertNotEqual(mutated["observed_sha256"], expected_digest)
 
     def test_archive_preflight_failure_happens_before_fresh_jobs(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -950,6 +1356,128 @@ class Section34ArchiveManifestTests(unittest.TestCase):
             self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep this")
             self.assertFalse((full_output / "raw").exists())
             self.assertFalse((full_output / "figures").exists())
+
+    def test_missing_archive_full_reaches_job_layer_and_records_skip(self) -> None:
+        records = _raw_full_grid()
+        aggregate = _qualitative_aggregate_grid()
+        conclusion, conclusion_errors = (
+            section_3_4_impl.evaluate_conclusion_consistency(aggregate, "full")
+        )
+        self.assertEqual(conclusion_errors, [])
+        comparison = {
+            "checks": [],
+            "missing_reference_keys": [],
+            "summary": {"compared": 0, "enforced": 0},
+            "conclusion_consistency": conclusion,
+        }
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            missing = root / "missing.zip"
+            model = root / "model.pth"
+            model.write_bytes(b"test model")
+            output = root / "output"
+            with (
+                patch.object(section_3_4_impl, "GNN_MODEL", model),
+                patch.object(
+                    section_3_4_impl,
+                    "load_archive_reference",
+                ) as load_archive,
+                patch.object(
+                    section_3_4_impl,
+                    "build_raw_archive_comparison",
+                ) as raw_comparison,
+                patch.object(
+                    section_3_4_impl,
+                    "_resolve_python",
+                    return_value="/usr/bin/python3",
+                ),
+                patch.object(section_3_4_impl, "_check_python_dependencies"),
+                patch.object(section_3_4_impl, "_check_pycall_dependencies"),
+                patch.object(
+                    section_3_4_impl,
+                    "run_jobs",
+                    return_value=[],
+                ) as run_jobs,
+                patch.object(section_3_4_impl, "source_logs") as source_logs,
+                patch.object(section_3_4_impl, "collect_logs", return_value=[]),
+                patch.object(
+                    section_3_4_impl,
+                    "parse_logs",
+                    return_value=records,
+                ),
+                patch.object(
+                    section_3_4_impl,
+                    "aggregate_runs",
+                    return_value=aggregate,
+                ),
+                patch.object(section_3_4_impl, "build_table_1", return_value=[]),
+                patch.object(
+                    section_3_4_impl,
+                    "build_reference_comparison",
+                    return_value=comparison,
+                ),
+                patch.object(
+                    section_3_4_impl,
+                    "publish_validated_artifacts",
+                    return_value=([], []),
+                ),
+                patch.object(section_3_4_impl, "write_provenance") as provenance,
+            ):
+                source_logs.return_value.__enter__.return_value = root / "raw"
+                returncode = section_3_4_impl.main(
+                    (
+                        "--mode",
+                        "full",
+                        "--archive",
+                        str(missing),
+                        "--output",
+                        str(output),
+                        "--no-plots",
+                    )
+                )
+
+            validation_path = output / "full" / "validation.json"
+            validation = json.loads(validation_path.read_text(encoding="utf-8"))
+            self.assertEqual(returncode, 0)
+            self.assertEqual(validation["status"], "passed")
+            self.assertEqual(
+                validation["archive_reference_status"],
+                "skipped_missing_archive",
+            )
+            self.assertEqual(
+                validation["raw_archive_comparison_status"],
+                "skipped_missing_archive",
+            )
+            self.assertEqual(validation["archive_reference_path"], str(missing))
+            self.assertTrue(
+                any("comparison are skipped" in warning for warning in validation["warnings"])
+            )
+            raw_archive_skip = json.loads(
+                (output / "full" / "raw_archive_comparison.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(raw_archive_skip["status"], "skipped")
+            self.assertFalse(raw_archive_skip["required"])
+            self.assertFalse(raw_archive_skip["archive_available"])
+            self.assertEqual(raw_archive_skip["archive_path"], str(missing))
+            self.assertIn("comparison are skipped", raw_archive_skip["reason"])
+            self.assertEqual(raw_archive_skip["errors"], [])
+            self.assertFalse((output / "full" / "archive_reference_runs.csv").exists())
+
+            load_archive.assert_not_called()
+            raw_comparison.assert_not_called()
+            run_jobs.assert_called_once()
+            jobs = run_jobs.call_args.args[0]
+            self.assertEqual(len(jobs), 30)
+            self.assertTrue(all(job.command[3] == "16" for job in jobs))
+            provenance_inputs = provenance.call_args.kwargs["inputs"]
+            self.assertNotIn(missing, provenance_inputs)
+            provenance_notes = provenance.call_args.kwargs["notes"]
+            self.assertTrue(
+                any("comparison are skipped" in str(note) for note in provenance_notes)
+            )
 
     def test_archive_reference_loader_persists_preflight_artifacts(self) -> None:
         comparison = {"summary": {"all_enforced_checks_passed": True}}

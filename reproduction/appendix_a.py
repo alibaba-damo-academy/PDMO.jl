@@ -206,7 +206,10 @@ NO_NUMERIC_REFERENCE_REASON = (
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
     parser.add_argument(
         "--mode",
         choices=("table", "parse", "archived-source", "full"),

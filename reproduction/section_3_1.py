@@ -291,7 +291,7 @@ def plot_structural_figures(raw_dir: Path, output: Path) -> list[str]:
     return warnings
 
 
-def main() -> int:
+def _legacy_main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     add_common_arguments(parser, default_output=REPRODUCTION_ROOT / "output" / "section_3_1")
     parser.add_argument(
@@ -389,10 +389,16 @@ def main() -> int:
     return 0
 
 
-if __name__ == "__main__":
+def main(argv=None) -> int:
+    """Dispatch imports and script execution to the strict reviewer CLI."""
+
     try:
         from .section_3_1_impl import main as strict_main
     except ImportError:
         from section_3_1_impl import main as strict_main
-    raise SystemExit(strict_main())
+    return strict_main(argv)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
 

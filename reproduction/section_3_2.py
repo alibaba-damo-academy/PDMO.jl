@@ -69,6 +69,7 @@ PAPER_NODES = tuple(range(200, 601, 100))
 PAPER_SEEDS = tuple(range(1, 11))
 PAPER_ARCS = 2000
 PAPER_THREADS = 16
+ARCHIVE_OPTIONAL_SKIP_REASON = "archive_not_found_optional_for_full"
 METHODS = ("basic", "bfs", "milp")
 METHOD_LABELS = {"basic": "Basic", "bfs": "BFS", "milp": "MILP"}
 METHOD_COLORS = {"basic": "#2980b9", "bfs": "#f39c12", "milp": "#27ae60"}
@@ -172,12 +173,100 @@ ARCHIVE_EXPECTED_OUTCOMES: dict[tuple[int, int, str], tuple[int, str]] = {
     for method in METHODS
 }
 
+# HiGHS returned a feasible incumbent at its 60-second MILP partition limit for
+# these 34 retained jobs. Their downstream ADMM result depends on which feasible
+# incumbent existed at the cutoff, so it is not a deterministic seed fingerprint.
+ARCHIVE_MILP_TIME_LIMIT_PAIRS = frozenset(
+    {
+        (300, 3),
+        (300, 4),
+        (300, 9),
+        (300, 10),
+        *((nodes, seed) for nodes in (400, 500, 600) for seed in PAPER_SEEDS),
+    }
+)
+ARCHIVE_MILP_CENSORED_KEYS = frozenset(
+    (nodes, seed, "milp")
+    for nodes, seed in ARCHIVE_MILP_TIME_LIMIT_PAIRS
+)
+
+# Post-bipartization count fingerprints parsed from the retained stdout logs.
+# Each tuple is (nodes, left, right, edges), ordered by paper seed.
+ARCHIVE_MILP_PARTITION_FINGERPRINTS: dict[
+    tuple[int, int], tuple[int, int, int, int]
+] = {
+    (nodes, seed): fingerprints[seed - 1]
+    for nodes, fingerprints in {
+        200: (
+            (2172, 186, 1986, 3972),
+            (2170, 185, 1985, 3970),
+            (2178, 189, 1989, 3978),
+            (2176, 188, 1988, 3976),
+            (2170, 185, 1985, 3970),
+            (2172, 186, 1986, 3972),
+            (2166, 183, 1983, 3966),
+            (2174, 187, 1987, 3974),
+            (2176, 188, 1988, 3976),
+            (2166, 183, 1983, 3966),
+        ),
+        300: (
+            (2256, 278, 1978, 3956),
+            (2252, 276, 1976, 3952),
+            (2260, 280, 1980, 3960),
+            (2254, 277, 1977, 3954),
+            (2276, 288, 1988, 3976),
+            (2260, 280, 1980, 3960),
+            (2252, 276, 1976, 3952),
+            (2258, 279, 1979, 3958),
+            (2260, 280, 1980, 3960),
+            (2573, 557, 2016, 4273),
+        ),
+        400: (
+            (2342, 371, 1971, 3942),
+            (2348, 374, 1974, 3948),
+            (2340, 370, 1970, 3940),
+            (2354, 377, 1977, 3954),
+            (2356, 378, 1978, 3956),
+            (2352, 376, 1976, 3952),
+            (2342, 371, 1971, 3942),
+            (2342, 371, 1971, 3942),
+            (2340, 1970, 370, 3940),
+            (2354, 377, 1977, 3954),
+        ),
+        500: (
+            (2438, 469, 1969, 3938),
+            (2432, 1966, 466, 3932),
+            (2424, 462, 1962, 3924),
+            (3181, 1313, 1868, 4681),
+            (2434, 467, 1967, 3934),
+            (2438, 469, 1969, 3938),
+            (2418, 459, 1959, 3918),
+            (2430, 465, 1965, 3930),
+            (2438, 469, 1969, 3938),
+            (2448, 474, 1974, 3948),
+        ),
+        600: (
+            (2721, 766, 1955, 4121),
+            (2516, 558, 1958, 3916),
+            (2512, 556, 1956, 3912),
+            (2516, 558, 1958, 3916),
+            (2701, 1927, 774, 4101),
+            (2530, 565, 1965, 3930),
+            (2508, 554, 1954, 3908),
+            (2518, 559, 1959, 3918),
+            (2516, 558, 1958, 3916),
+            (2534, 567, 1967, 3934),
+        ),
+    }.items()
+    for seed in PAPER_SEEDS
+}
+
 # SHA256 of the normalized 150-row semantic manifest produced by
 # _archive_semantic_manifest. This is intentionally a literal independent of
 # the supplied ZIP; changing a job mapping, command setting, outcome, or censor
 # identity changes the digest and rejects full mode before any output.
 ARCHIVE_SEMANTIC_SHA256 = (
-    "3672b09615fdc5c7044e8d37b57b165e02e52091310fa634e3198e1bbf285821"
+    "9a49e8104e188c290f5edc83809806573cffd1c0bc8914d60ee3b835f34b50b0"
 )
 
 VALID_STATUSES = {
@@ -283,6 +372,167 @@ RE_PROGRESS = re.compile(
 RE_DRIVER_FAILURE = re.compile(
     r"Failed to (?:generate|solve) the network flow problem|MILP bipartization failed"
 )
+RE_HIGHS_STATUS = re.compile(r"^\s*Status\s{2,}(.+?)\s*$", re.MULTILINE)
+RE_HIGHS_PRIMAL_BOUND = re.compile(
+    rf"^\s*Primal bound\s+({NUMBER}|[-+]?inf)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+RE_HIGHS_DUAL_BOUND = re.compile(
+    rf"^\s*Dual bound\s+({NUMBER}|[-+]?inf)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+RE_HIGHS_GAP = re.compile(
+    rf"^\s*Gap\s+({NUMBER}|[-+]?inf)%", re.IGNORECASE | re.MULTILINE
+)
+RE_HIGHS_SOLUTION_STATUS = re.compile(
+    r"^\s*Solution status\s+(\S+)\s*$", re.MULTILINE
+)
+RE_MILP_PARTITION_SUMMARY = re.compile(
+    r"Number of nodes\s*=\s*(\d+)\s*"
+    r"Parition size \(left, right\)\s*=\s*\((\d+),\s*(\d+)\)\s*"
+    r"Number of edges\s*=\s*(\d+)",
+    re.DOTALL,
+)
+
+MILP_METADATA_FIELDS = (
+    "milp_metadata_available",
+    "milp_source_nodes",
+    "milp_source_arcs",
+    "milp_source_seed",
+    "milp_solve_status",
+    "milp_time_limit",
+    "milp_primal_bound",
+    "milp_dual_bound",
+    "milp_gap_percent",
+    "milp_solution_status",
+    "milp_solution_feasible",
+    "milp_partition_nodes",
+    "milp_partition_left",
+    "milp_partition_right",
+    "milp_partition_edges",
+    "milp_partition_fingerprint",
+    "milp_partition_valid",
+)
+
+
+def parse_milp_metadata(
+    text: str, source_log: str
+) -> tuple[dict[str, object | None], list[str]]:
+    """Parse HiGHS and post-bipartization structure from one combined log."""
+
+    metadata: dict[str, object | None] = {
+        field: None for field in MILP_METADATA_FIELDS
+    }
+    errors: list[str] = []
+    banner = "Running Bipartite ADMM with MILP bipartization..."
+    banner_index = text.find(banner)
+    report_matches = list(
+        re.finditer(r"^\s*Solving report\s*$", text, re.MULTILINE)
+    )
+    report_index = report_matches[0].start() if report_matches else -1
+    if banner_index < 0 and report_index < 0:
+        return metadata, errors
+    highs_present = "Running HiGHS" in text or report_index >= 0
+    if not highs_present:
+        return metadata, errors
+    if report_index < 0:
+        errors.append(f"{source_log}/milp: HiGHS report is missing Solving report")
+        return metadata, errors
+    if len(report_matches) != 1:
+        errors.append(
+            f"{source_log}/milp: expected one HiGHS Solving report, "
+            f"found {len(report_matches)}"
+        )
+
+    # stderr can precede the buffered stdout method banner in merged fresh logs,
+    # so parse the unique HiGHS report and MILP graph summary from the full text.
+    report = text[report_index : report_index + 4_000]
+    instance_match = RE_INSTANCE.search(text)
+    seed_match = re.search(r"^\s*seed\s*=\s*(\d+)\s*$", text, re.MULTILINE)
+    if instance_match is None:
+        errors.append(f"{source_log}/milp: missing source nodes/arcs identity")
+    else:
+        metadata["milp_source_nodes"] = int(instance_match.group(1))
+        metadata["milp_source_arcs"] = int(instance_match.group(2))
+    if seed_match is None:
+        errors.append(f"{source_log}/milp: missing source seed identity")
+    else:
+        metadata["milp_source_seed"] = int(seed_match.group(1))
+    report_patterns = {
+        "milp_solve_status": (RE_HIGHS_STATUS, str),
+        "milp_primal_bound": (RE_HIGHS_PRIMAL_BOUND, float),
+        "milp_dual_bound": (RE_HIGHS_DUAL_BOUND, float),
+        "milp_gap_percent": (RE_HIGHS_GAP, float),
+        "milp_solution_status": (RE_HIGHS_SOLUTION_STATUS, str),
+    }
+    for field, (pattern, convert) in report_patterns.items():
+        match = pattern.search(report)
+        if match is None:
+            errors.append(f"{source_log}/milp: HiGHS report is missing {field}")
+            continue
+        try:
+            metadata[field] = convert(match.group(1).strip())
+        except ValueError:
+            errors.append(
+                f"{source_log}/milp: invalid {field} value {match.group(1)!r}"
+            )
+
+    status = metadata["milp_solve_status"]
+    if status is not None:
+        metadata["milp_time_limit"] = status == "Time limit reached"
+        if status not in {"Optimal", "Time limit reached"}:
+            errors.append(
+                f"{source_log}/milp: unsupported HiGHS status {status!r}"
+            )
+    solution_status = metadata["milp_solution_status"]
+    if solution_status is not None:
+        metadata["milp_solution_feasible"] = (
+            str(solution_status).lower() == "feasible"
+        )
+        if metadata["milp_solution_feasible"] is not True:
+            errors.append(
+                f"{source_log}/milp: HiGHS partition solution is not feasible: "
+                f"{solution_status!r}"
+            )
+
+    partition_section = text[banner_index:] if banner_index >= 0 else text
+    partition_match = RE_MILP_PARTITION_SUMMARY.search(partition_section)
+    if partition_match is None:
+        errors.append(
+            f"{source_log}/milp: missing post-bipartization count fingerprint"
+        )
+    else:
+        partition_nodes, left, right, edges = (
+            int(partition_match.group(index)) for index in range(1, 5)
+        )
+        fingerprint = (partition_nodes, left, right, edges)
+        metadata.update(
+            {
+                "milp_partition_nodes": partition_nodes,
+                "milp_partition_left": left,
+                "milp_partition_right": right,
+                "milp_partition_edges": edges,
+                "milp_partition_fingerprint": ":".join(
+                    str(value) for value in fingerprint
+                ),
+                "milp_partition_valid": (
+                    partition_nodes > 0
+                    and left > 0
+                    and right > 0
+                    and edges > 0
+                    and partition_nodes == left + right
+                ),
+            }
+        )
+    metadata["milp_metadata_available"] = (
+        all(
+            metadata[field] is not None
+            for field in MILP_METADATA_FIELDS
+            if field != "milp_metadata_available"
+        )
+        and not errors
+    )
+    return metadata, errors
 
 
 RUN_FIELDS = (
@@ -301,6 +551,7 @@ RUN_FIELDS = (
     "iteration_source",
     "stop_iter",
     "latest_progress_iter",
+    *MILP_METADATA_FIELDS,
     "source_log",
     "parse_warnings",
 )
@@ -356,103 +607,105 @@ def parse_log(path: Path, source_log: str) -> tuple[list[dict[str, object]], dic
         method: {} for method in METHODS
     }
     timing_method: str | None = None
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    milp_metadata, milp_metadata_errors = parse_milp_metadata(text, source_log)
+    errors.extend(milp_metadata_errors)
 
-    with path.open("r", encoding="utf-8", errors="ignore") as stream:
-        for line_number, raw_line in enumerate(stream, 1):
-            line = raw_line.rstrip("\n")
+    for line_number, raw_line in enumerate(io.StringIO(text), 1):
+        line = raw_line.rstrip("\n")
 
-            match = RE_SEED.match(line)
-            if match:
-                seed = int(match.group(1))
-            match = RE_INSTANCE.search(line)
-            if match:
-                nodes, arcs = int(match.group(1)), int(match.group(2))
-            for setting, pattern, convert in SETTING_PATTERNS:
-                match = pattern.match(line)
-                if match is None:
-                    continue
-                value = convert(match.group(1))
-                previous = settings[setting]
-                if previous is not None and previous != value:
-                    errors.append(
-                        f"{source_log}:{line_number}: conflicting {setting} echoes: "
-                        f"{previous!r} then {value!r}"
-                    )
-                settings[setting] = value
+        match = RE_SEED.match(line)
+        if match:
+            seed = int(match.group(1))
+        match = RE_INSTANCE.search(line)
+        if match:
+            nodes, arcs = int(match.group(1)), int(match.group(2))
+        for setting, pattern, convert in SETTING_PATTERNS:
+            match = pattern.match(line)
+            if match is None:
+                continue
+            value = convert(match.group(1))
+            previous = settings[setting]
+            if previous is not None and previous != value:
+                errors.append(
+                    f"{source_log}:{line_number}: conflicting {setting} echoes: "
+                    f"{previous!r} then {value!r}"
+                )
+            settings[setting] = value
+            break
+
+        if RE_DRIVER_FAILURE.search(line):
+            errors.append(f"{source_log}:{line_number}: driver reported: {line.strip()}")
+
+        started: str | None = None
+        for pattern, method in RUN_STARTS:
+            if pattern.search(line):
+                started = method
                 break
+        if started is not None:
+            if current is not None:
+                methods.append(current)
+            current = _new_method(started)
+            continue
 
-            if RE_DRIVER_FAILURE.search(line):
-                errors.append(f"{source_log}:{line_number}: driver reported: {line.strip()}")
+        match = RE_PARTITION.search(line)
+        if match:
+            partition_kind = match.group(1)
+            classified = partition_kind.partition("_")[0].lower()
+            if classified in timing_by_method:
+                timing_method = classified
+                timing_by_method[classified]["partition_kind"] = partition_kind
+                timing_by_method[classified]["partition_time_sec"] = float(match.group(2))
+            continue
+        if RE_ALREADY_BIPARTITE.search(line):
+            current_method = str(current["method"]) if current is not None else None
+            if (
+                current_method is not None
+                and "partition_time_sec" not in timing_by_method[current_method]
+            ):
+                timing_method = current_method
+            else:
+                timing_method = next(
+                    (
+                        method
+                        for method in METHODS
+                        if "partition_time_sec" not in timing_by_method[method]
+                    ),
+                    "basic",
+                )
+            timing_by_method[timing_method]["partition_time_sec"] = 0.0
+            timing_by_method[timing_method][
+                "partition_kind"
+            ] = "SKIPPED_ALREADY_BIPARTITE"
+            continue
+        match = RE_INITIALIZATION.search(line)
+        if match:
+            target = timing_method
+            if target is None and current is not None:
+                target = str(current["method"])
+            if target in timing_by_method:
+                timing_by_method[target]["initialization_time_sec"] = float(match.group(1))
+            continue
 
-            started: str | None = None
-            for pattern, method in RUN_STARTS:
-                if pattern.search(line):
-                    started = method
-                    break
-            if started is not None:
-                if current is not None:
-                    methods.append(current)
-                current = _new_method(started)
-                continue
+        if current is None:
+            continue
 
-            match = RE_PARTITION.search(line)
-            if match:
-                partition_kind = match.group(1)
-                classified = partition_kind.partition("_")[0].lower()
-                if classified in timing_by_method:
-                    timing_method = classified
-                    timing_by_method[classified]["partition_kind"] = partition_kind
-                    timing_by_method[classified]["partition_time_sec"] = float(match.group(2))
-                continue
-            if RE_ALREADY_BIPARTITE.search(line):
-                current_method = str(current["method"]) if current is not None else None
-                if (
-                    current_method is not None
-                    and "partition_time_sec" not in timing_by_method[current_method]
-                ):
-                    timing_method = current_method
-                else:
-                    timing_method = next(
-                        (
-                            method
-                            for method in METHODS
-                            if "partition_time_sec" not in timing_by_method[method]
-                        ),
-                        "basic",
-                    )
-                timing_by_method[timing_method]["partition_time_sec"] = 0.0
-                timing_by_method[timing_method][
-                    "partition_kind"
-                ] = "SKIPPED_ALREADY_BIPARTITE"
-                continue
-            match = RE_INITIALIZATION.search(line)
-            if match:
-                target = timing_method
-                if target is None and current is not None:
-                    target = str(current["method"])
-                if target in timing_by_method:
-                    timing_by_method[target]["initialization_time_sec"] = float(match.group(1))
-                continue
-
-            if current is None:
-                continue
-
-            match = RE_STATUS.match(line)
-            if match:
-                current["termination_status"] = match.group(1)
-                continue
-            match = RE_TOTAL_TIME.match(line)
-            if match:
-                current["admm_time_sec"] = float(match.group(1))
-                continue
-            match = RE_STOP_ITER.match(line)
-            if match:
-                current["stop_iter"] = int(match.group(1))
-                continue
-            match = RE_PROGRESS.match(line)
-            if match:
-                # Unlike the historical parser, retain the latest progress row.
-                current["latest_progress_iter"] = int(match.group(1))
+        match = RE_STATUS.match(line)
+        if match:
+            current["termination_status"] = match.group(1)
+            continue
+        match = RE_TOTAL_TIME.match(line)
+        if match:
+            current["admm_time_sec"] = float(match.group(1))
+            continue
+        match = RE_STOP_ITER.match(line)
+        if match:
+            current["stop_iter"] = int(match.group(1))
+            continue
+        match = RE_PROGRESS.match(line)
+        if match:
+            # Unlike the historical parser, retain the latest progress row.
+            current["latest_progress_iter"] = int(match.group(1))
 
     if current is not None:
         methods.append(current)
@@ -524,6 +777,11 @@ def parse_log(path: Path, source_log: str) -> tuple[list[dict[str, object]], dic
                 "iteration_source": iteration_source,
                 "stop_iter": stop_iter,
                 "latest_progress_iter": latest,
+                **(
+                    milp_metadata
+                    if method == "milp"
+                    else {field: None for field in MILP_METADATA_FIELDS}
+                ),
                 "source_log": source_log,
                 "parse_warnings": "; ".join(warnings),
             }
@@ -882,7 +1140,7 @@ def build_raw_archive_comparison(
     fresh_rows: Sequence[Mapping[str, object]],
     archive_rows: Sequence[Mapping[str, object]],
 ) -> dict[str, object]:
-    """Compare a fresh paper grid with the ZIP's 150 exact per-run rows."""
+    """Compare a fresh grid with field-aware ADMM and MILP censoring."""
 
     fresh_index, fresh_duplicates, fresh_missing_metadata = _raw_index(fresh_rows)
     archive_index, archive_duplicates, archive_missing_metadata = _raw_index(
@@ -905,7 +1163,9 @@ def build_raw_archive_comparison(
     for key in sorted(shared_keys, key=_raw_sort_key):
         fresh = fresh_index[key]
         archived = archive_index[key]
-        censored = key == PAPER_CENSORED_KEY
+        admm_censored = key == PAPER_CENSORED_KEY
+        milp_partition_censored = key in ARCHIVE_MILP_CENSORED_KEYS
+        outcome_censored = admm_censored or milp_partition_censored
         _raw_check(
             checks,
             key=key,
@@ -916,10 +1176,96 @@ def build_raw_archive_comparison(
             category="identity",
             reason="the paper network-flow grid uses exactly 2000 arcs",
         )
+
+        if key[2] == "milp":
+            for field in (
+                "milp_metadata_available",
+                "milp_solution_feasible",
+                "milp_partition_valid",
+            ):
+                _raw_check(
+                    checks,
+                    key=key,
+                    field=field,
+                    observed=fresh.get(field) is True,
+                    expected=True,
+                    enforced=True,
+                    category="partition_validity",
+                    reason=(
+                        "every MILP job must return a feasible, structurally "
+                        "valid partition before downstream ADMM starts"
+                    ),
+                )
+            _raw_check(
+                checks,
+                key=key,
+                field="milp_partition_fingerprint",
+                observed=fresh.get("milp_partition_fingerprint"),
+                expected=archived.get("milp_partition_fingerprint"),
+                enforced=not milp_partition_censored,
+                category=(
+                    "partition_structure_censored"
+                    if milp_partition_censored
+                    else "partition_structure"
+                ),
+                reason=(
+                    "the feasible-incumbent cutoff can change partition counts "
+                    "and membership; the observed count fingerprint is reported "
+                    "but only internal structural validity is enforced"
+                    if milp_partition_censored
+                    else "archive-optimal post-bipartization "
+                    "node/left/right/edge counts must match"
+                ),
+            )
+            partition_status_reason = (
+                "the archive HiGHS solve stopped at 60 seconds with a feasible "
+                "incumbent, so status and incumbent bounds are non-exact"
+                if milp_partition_censored
+                else "archive-optimal HiGHS partition status"
+            )
+            for field in ("milp_solve_status", "milp_time_limit"):
+                _raw_check(
+                    checks,
+                    key=key,
+                    field=field,
+                    observed=fresh.get(field),
+                    expected=archived.get(field),
+                    enforced=not milp_partition_censored,
+                    category=(
+                        "partition_solver_censored"
+                        if milp_partition_censored
+                        else "partition_solver"
+                    ),
+                    reason=partition_status_reason,
+                )
+            for field in (
+                "milp_primal_bound",
+                "milp_dual_bound",
+                "milp_gap_percent",
+            ):
+                _raw_check(
+                    checks,
+                    key=key,
+                    field=field,
+                    observed=fresh.get(field),
+                    expected=archived.get(field),
+                    enforced=False,
+                    category="partition_bounds_informational",
+                    reason=(
+                        "HiGHS incumbent/bound progress depends on wall-clock "
+                        "throughput and is not an exact reproduction field"
+                    ),
+                )
+
         outcome_reason = (
             "the archived paper run hit its 3600-second wall-time limit"
-            if censored
-            else "deterministic seeded ADMM outcome"
+            if admm_censored
+            else (
+                "the archive MILP partition solve stopped at 60 seconds with a "
+                "feasible incumbent; downstream ADMM depends on its membership"
+                if milp_partition_censored
+                else "deterministic seeded ADMM outcome"
+            )
         )
         for field in ("iterations", "termination_status"):
             _raw_check(
@@ -928,9 +1274,42 @@ def build_raw_archive_comparison(
                 field=field,
                 observed=fresh.get(field),
                 expected=archived.get(field),
-                enforced=not censored,
-                category="outcome_censored" if censored else "outcome",
+                enforced=not outcome_censored,
+                category="outcome_censored" if outcome_censored else "outcome",
                 reason=outcome_reason,
+            )
+        if milp_partition_censored:
+            iterations = fresh.get("iterations")
+            iterations_valid = (
+                isinstance(iterations, int)
+                and not isinstance(iterations, bool)
+                and iterations >= 0
+            )
+            _raw_check(
+                checks,
+                key=key,
+                field="downstream_iterations_valid",
+                observed=iterations_valid,
+                expected=True,
+                enforced=True,
+                category="downstream_validity",
+                reason=(
+                    "a time-censored feasible partition must still produce a "
+                    "valid downstream ADMM result"
+                ),
+            )
+            _raw_check(
+                checks,
+                key=key,
+                field="downstream_status_valid",
+                observed=fresh.get("termination_status") in VALID_STATUSES,
+                expected=True,
+                enforced=True,
+                category="downstream_validity",
+                reason=(
+                    "a time-censored feasible partition must still produce a "
+                    "recognized downstream ADMM terminal status"
+                ),
             )
         for field in (
             "partition_time_sec",
@@ -948,7 +1327,7 @@ def build_raw_archive_comparison(
                 category="timing_informational",
                 reason="wall-clock measurement is hardware-dependent",
             )
-        if censored:
+        if admm_censored:
             censored_rows.append(
                 {
                     "key": _raw_text_key(key),
@@ -957,8 +1336,55 @@ def build_raw_archive_comparison(
                     "method": key[2],
                     "archive_status": archived.get("termination_status"),
                     "observed_status": fresh.get("termination_status"),
-                    "reason": "archive_time_limit",
+                    "censor_type": "admm_wall_time",
+                    "reason": "archive_admm_time_limit",
+                    "censor_reason": "archive_admm_time_limit",
                     "outcome_enforced": False,
+                    "non_exact_fields": ["iterations", "termination_status"],
+                }
+            )
+        elif milp_partition_censored:
+            censored_rows.append(
+                {
+                    "key": _raw_text_key(key),
+                    "nodes": key[0],
+                    "seed": key[1],
+                    "method": key[2],
+                    "censor_type": "milp_partition_time_limit",
+                    "censor_reason": "archive_milp_partition_time_limit",
+                    "reason": (
+                        "archive HiGHS reached its 60-second limit with a "
+                        "feasible incumbent"
+                    ),
+                    "archive_partition_status": archived.get(
+                        "milp_solve_status"
+                    ),
+                    "observed_partition_status": fresh.get(
+                        "milp_solve_status"
+                    ),
+                    "archive_partition_fingerprint": archived.get(
+                        "milp_partition_fingerprint"
+                    ),
+                    "observed_partition_fingerprint": fresh.get(
+                        "milp_partition_fingerprint"
+                    ),
+                    "archive_status": archived.get("termination_status"),
+                    "observed_status": fresh.get("termination_status"),
+                    "archive_iterations": archived.get("iterations"),
+                    "observed_iterations": fresh.get("iterations"),
+                    "outcome_enforced": False,
+                    "feasibility_and_structural_validity_enforced": True,
+                    "count_fingerprint_exact_enforced": False,
+                    "non_exact_fields": [
+                        "milp_solve_status",
+                        "milp_time_limit",
+                        "milp_primal_bound",
+                        "milp_dual_bound",
+                        "milp_gap_percent",
+                        "partition_membership_not_serialized",
+                        "iterations",
+                        "termination_status",
+                    ],
                 }
             )
 
@@ -972,6 +1398,44 @@ def build_raw_archive_comparison(
     )
     unexpected_archive_time_limit_keys = [
         key for key in archive_time_limit_keys if key != PAPER_CENSORED_KEY
+    ]
+    archive_milp_time_limit_keys = sorted(
+        (
+            key
+            for key, row in archive_index.items()
+            if key[2] == "milp" and row.get("milp_time_limit") is True
+        ),
+        key=_raw_sort_key,
+    )
+    archive_milp_time_limit_key_set = set(archive_milp_time_limit_keys)
+    missing_archive_milp_censor_keys = sorted(
+        ARCHIVE_MILP_CENSORED_KEYS.difference(
+            archive_milp_time_limit_key_set
+        ),
+        key=_raw_sort_key,
+    )
+    unexpected_archive_milp_censor_keys = sorted(
+        archive_milp_time_limit_key_set.difference(
+            ARCHIVE_MILP_CENSORED_KEYS
+        ),
+        key=_raw_sort_key,
+    )
+    archive_invalid_milp_rows = [
+        {
+            "key": _raw_text_key(key),
+            "metadata_available": row.get("milp_metadata_available"),
+            "solution_feasible": row.get("milp_solution_feasible"),
+            "partition_valid": row.get("milp_partition_valid"),
+        }
+        for key, row in sorted(
+            archive_index.items(), key=lambda item: _raw_sort_key(item[0])
+        )
+        if key[2] == "milp"
+        and (
+            row.get("milp_metadata_available") is not True
+            or row.get("milp_solution_feasible") is not True
+            or row.get("milp_partition_valid") is not True
+        )
     ]
     archive_wrong_arcs = [
         {
@@ -1001,6 +1465,9 @@ def build_raw_archive_comparison(
             archive_missing_paper_keys,
             archive_extra_keys,
             archive_wrong_arcs,
+            archive_invalid_milp_rows,
+            missing_archive_milp_censor_keys,
+            unexpected_archive_milp_censor_keys,
         )
     )
     enforced_outcome_checks = [
@@ -1014,8 +1481,16 @@ def build_raw_archive_comparison(
         "policy": {
             "keys": "exact 150-row (nodes, seed, method) paper grid",
             "iterations_and_status": (
-                "exact on 149 deterministic rows; informational only for "
-                "nodes=500/seed=6/basic because the archived run hit its time limit"
+                "exact on 115 deterministic rows; non-exact on the 34 MILP "
+                "rows whose archive partition solve reached its feasible "
+                "60-second cutoff, and nodes=500/seed=6/basic whose archive "
+                "ADMM solve reached its 3600-second cutoff"
+            ),
+            "milp_partition": (
+                "all 50 jobs require complete metadata, a feasible partition, "
+                "and internally valid (nodes,left,right,edges) counts; for the "
+                "34 archive time-limit jobs, count identity, HiGHS "
+                "status/bounds, and unrecorded membership are non-exact"
             ),
             "timings": "informational only",
         },
@@ -1038,6 +1513,23 @@ def build_raw_archive_comparison(
         "unexpected_archive_time_limit_keys": [
             list(key) for key in unexpected_archive_time_limit_keys
         ],
+        "archive_milp_time_limit_keys": [
+            list(key) for key in archive_milp_time_limit_keys
+        ],
+        "expected_archive_milp_time_limit_key_count": len(
+            ARCHIVE_MILP_CENSORED_KEYS
+        ),
+        "missing_archive_milp_censor_keys": [
+            list(key) for key in missing_archive_milp_censor_keys
+        ],
+        "unexpected_archive_milp_censor_keys": [
+            list(key) for key in unexpected_archive_milp_censor_keys
+        ],
+        "archive_milp_censor_manifest_valid": (
+            not missing_archive_milp_censor_keys
+            and not unexpected_archive_milp_censor_keys
+        ),
+        "archive_invalid_milp_rows": archive_invalid_milp_rows,
         "censored_archive_status_valid": censored_archive_status_valid,
         "censored_rows": censored_rows,
         "checks": checks,
@@ -1045,9 +1537,24 @@ def build_raw_archive_comparison(
             "expected_keys": len(PAPER_RUN_KEYS),
             "compared_keys": len(shared_keys),
             "stable_outcome_rows": sum(
-                key != PAPER_CENSORED_KEY for key in shared_keys
+                key != PAPER_CENSORED_KEY
+                and key not in ARCHIVE_MILP_CENSORED_KEYS
+                for key in shared_keys
             ),
             "censored_row_count": len(censored_rows),
+            "admm_censored_row_count": sum(
+                row["censor_type"] == "admm_wall_time"
+                for row in censored_rows
+            ),
+            "milp_partition_censored_row_count": sum(
+                row["censor_type"] == "milp_partition_time_limit"
+                for row in censored_rows
+            ),
+            "partition_censored_row_count": sum(
+                row["censor_type"] == "milp_partition_time_limit"
+                for row in censored_rows
+            ),
+            "censored_outcome_row_count": len(censored_rows),
             "enforced": len(enforced_checks),
             "enforced_identity_checks": len(enforced_identity_checks),
             "enforced_outcome_checks": len(enforced_outcome_checks),
@@ -1059,6 +1566,8 @@ def build_raw_archive_comparison(
                 key_integrity_valid
                 and censored_archive_status_valid
                 and not unexpected_archive_time_limit_keys
+                and not missing_archive_milp_censor_keys
+                and not unexpected_archive_milp_censor_keys
                 and enforced_failed == 0
             ),
         },
@@ -1083,6 +1592,18 @@ def raw_archive_validation_errors(comparison: Mapping[str, object]) -> list[str]
         ("archive_extra_keys", "non-paper keys in archive reference"),
         ("archive_wrong_arcs", "archive rows whose arcs value is not 2000"),
         ("unexpected_archive_time_limit_keys", "unexpected archived time-limit rows"),
+        (
+            "missing_archive_milp_censor_keys",
+            "expected archived MILP partition time-limit rows that are missing",
+        ),
+        (
+            "unexpected_archive_milp_censor_keys",
+            "unexpected archived MILP partition time-limit rows",
+        ),
+        (
+            "archive_invalid_milp_rows",
+            "archived MILP rows without a valid feasible partition",
+        ),
     ):
         values = comparison.get(list_field)
         if isinstance(values, list) and values:
@@ -1093,6 +1614,11 @@ def raw_archive_validation_errors(comparison: Mapping[str, object]) -> list[str]
         errors.append(
             "Raw archive comparison expected nodes=500/seed=6/basic to be the "
             "archived ADMM time-limit row"
+        )
+    if not bool(comparison.get("archive_milp_censor_manifest_valid")):
+        errors.append(
+            "Raw archive comparison expected the exact 34-row feasible MILP "
+            "partition time-limit censor manifest"
         )
 
     checks = comparison.get("checks")
@@ -1171,6 +1697,7 @@ def _archive_job_sources(
     archive: Path,
 ) -> tuple[
     dict[tuple[str, int], str],
+    dict[tuple[str, int], str],
     set[tuple[str, int]],
     set[tuple[str, int]],
     list[str],
@@ -1179,6 +1706,7 @@ def _archive_job_sources(
 
     archive = archive.expanduser().resolve()
     commands: dict[tuple[str, int], str] = {}
+    stdout_logs: dict[tuple[str, int], str] = {}
     command_jobs: set[tuple[str, int]] = set()
     stdout_jobs: set[tuple[str, int]] = set()
     errors: list[str] = []
@@ -1187,8 +1715,7 @@ def _archive_job_sources(
         *,
         parts: tuple[str, ...],
         leaf: str,
-        command_text: str | None,
-        source: str,
+        content: str,
     ) -> None:
         try:
             section_index = parts.index(ARCHIVE_SECTION)
@@ -1206,8 +1733,10 @@ def _archive_job_sources(
             errors.append(f"duplicate archive member for {job[0]}/{job[1]}/{leaf}")
             return
         target.add(job)
-        if command_text is not None:
-            commands[job] = command_text
+        if leaf == "cmd":
+            commands[job] = content
+        else:
+            stdout_logs[job] = content
 
     if archive.is_dir():
         section_root = _archive_section_root(archive)
@@ -1224,12 +1753,9 @@ def _archive_job_sources(
                     record(
                         parts=tuple(path.parts),
                         leaf=leaf,
-                        command_text=(
-                            path.read_text(encoding="utf-8", errors="ignore")
-                            if leaf == "cmd"
-                            else None
+                        content=path.read_text(
+                            encoding="utf-8", errors="ignore"
                         ),
-                        source=str(path),
                     )
     elif archive.is_file():
         try:
@@ -1244,18 +1770,41 @@ def _archive_job_sources(
                     record(
                         parts=parts,
                         leaf=leaf,
-                        command_text=(
-                            zipped.read(name).decode("utf-8", errors="ignore")
-                            if leaf == "cmd"
-                            else None
+                        content=zipped.read(name).decode(
+                            "utf-8", errors="ignore"
                         ),
-                        source=name,
                     )
         except zipfile.BadZipFile as error:
             raise ValueError(f"invalid archive ZIP {archive}: {error}") from error
     else:
         raise ValueError(f"archive reference does not exist: {archive}")
-    return commands, command_jobs, stdout_jobs, errors
+    return commands, stdout_logs, command_jobs, stdout_jobs, errors
+
+
+def _bind_archive_milp_metadata(
+    rows: Sequence[dict[str, object]],
+    stdout_logs: Mapping[tuple[str, int], str],
+) -> list[str]:
+    """Attach source-parsed MILP metadata to the retained per-method rows."""
+
+    errors: list[str] = []
+    rows_by_key = {
+        (int(row["nodes"]), int(row["seed"]), str(row["method"])): row
+        for row in rows
+    }
+    for (nodes, seed), job in sorted(ARCHIVE_PAPER_JOBS.items()):
+        stdout = stdout_logs.get(job)
+        if stdout is None:
+            continue
+        metadata, parse_errors = parse_milp_metadata(
+            stdout, f"{job[0]}/{job[1]}/stdout.log"
+        )
+        errors.extend(parse_errors)
+        row = rows_by_key.get((nodes, seed, "milp"))
+        if row is None:
+            continue
+        row.update(metadata)
+    return errors
 
 
 def _archive_command_config(
@@ -1316,7 +1865,25 @@ def _archive_semantic_manifest(
                 "logInterval": int(config["logInterval"]),
                 "iterations": int(row["iterations"]),
                 "termination_status": str(row["termination_status"]),
-                "censored": (nodes, seed, method) == PAPER_CENSORED_KEY,
+                "admm_wall_time_censored": (
+                    (nodes, seed, method) == PAPER_CENSORED_KEY
+                ),
+                "milp_partition_time_censored": (
+                    (nodes, seed, method) in ARCHIVE_MILP_CENSORED_KEYS
+                ),
+                "milp_source_nodes": row.get("milp_source_nodes"),
+                "milp_source_arcs": row.get("milp_source_arcs"),
+                "milp_source_seed": row.get("milp_source_seed"),
+                "milp_solve_status": row.get("milp_solve_status"),
+                "milp_time_limit": row.get("milp_time_limit"),
+                "milp_solution_status": row.get("milp_solution_status"),
+                "milp_solution_feasible": row.get(
+                    "milp_solution_feasible"
+                ),
+                "milp_partition_fingerprint": row.get(
+                    "milp_partition_fingerprint"
+                ),
+                "milp_partition_valid": row.get("milp_partition_valid"),
             }
         )
     return manifest
@@ -1330,9 +1897,19 @@ def _archive_semantic_digest(manifest: Sequence[Mapping[str, object]]) -> str:
 
 
 def _archive_reference_errors(
-    rows: Sequence[Mapping[str, object]], archive: Path
+    rows: Sequence[dict[str, object]], archive: Path
 ) -> list[str]:
     errors: list[str] = []
+    (
+        commands,
+        stdout_logs,
+        command_jobs,
+        stdout_jobs,
+        source_errors,
+    ) = _archive_job_sources(archive)
+    errors.extend(source_errors)
+    errors.extend(_bind_archive_milp_metadata(rows, stdout_logs))
+
     index, duplicates, missing_metadata = _raw_index(rows)
     if missing_metadata:
         errors.append(f"{missing_metadata} archive rows lack nodes/seed/method metadata")
@@ -1367,6 +1944,60 @@ def _archive_reference_errors(
                 f"method={method}: expected {expected_outcome}, "
                 f"got {observed_outcome}"
             )
+        if method == "milp":
+            expected_time_limit = (nodes, seed) in ARCHIVE_MILP_TIME_LIMIT_PAIRS
+            expected_status = (
+                "Time limit reached" if expected_time_limit else "Optimal"
+            )
+            expected_source_identity = (nodes, PAPER_ARCS, seed)
+            observed_source_identity = (
+                row.get("milp_source_nodes"),
+                row.get("milp_source_arcs"),
+                row.get("milp_source_seed"),
+            )
+            expected_fingerprint = ":".join(
+                str(value)
+                for value in ARCHIVE_MILP_PARTITION_FINGERPRINTS[(nodes, seed)]
+            )
+            if row.get("milp_metadata_available") is not True:
+                errors.append(
+                    f"archive MILP metadata missing for nodes={nodes}, seed={seed}"
+                )
+            if observed_source_identity != expected_source_identity:
+                errors.append(
+                    f"archive stdout identity mismatch for nodes={nodes}, "
+                    f"seed={seed}: expected {expected_source_identity}, "
+                    f"got {observed_source_identity}"
+                )
+            if row.get("milp_solve_status") != expected_status:
+                errors.append(
+                    f"archive MILP censor manifest mismatch for nodes={nodes}, "
+                    f"seed={seed}: expected {expected_status!r}, "
+                    f"got {row.get('milp_solve_status')!r}"
+                )
+            if row.get("milp_time_limit") is not expected_time_limit:
+                errors.append(
+                    f"archive MILP time-limit flag mismatch for nodes={nodes}, "
+                    f"seed={seed}: expected {expected_time_limit!r}, "
+                    f"got {row.get('milp_time_limit')!r}"
+                )
+            if row.get("milp_solution_feasible") is not True:
+                errors.append(
+                    f"archive MILP partition is not feasible for nodes={nodes}, "
+                    f"seed={seed}"
+                )
+            if row.get("milp_partition_valid") is not True:
+                errors.append(
+                    f"archive MILP partition fingerprint is invalid for "
+                    f"nodes={nodes}, seed={seed}"
+                )
+            if row.get("milp_partition_fingerprint") != expected_fingerprint:
+                errors.append(
+                    f"archive MILP partition fingerprint mismatch for "
+                    f"nodes={nodes}, seed={seed}: expected "
+                    f"{expected_fingerprint!r}, got "
+                    f"{row.get('milp_partition_fingerprint')!r}"
+                )
         if expected_job is not None:
             expected_suffix = (
                 expected_job[0],
@@ -1381,8 +2012,26 @@ def _archive_reference_errors(
                     f"got {observed_path}"
                 )
 
-    commands, command_jobs, stdout_jobs, source_errors = _archive_job_sources(archive)
-    errors.extend(source_errors)
+    observed_milp_time_limit_keys = {
+        key
+        for key, row in index.items()
+        if key[2] == "milp" and row.get("milp_time_limit") is True
+    }
+    missing_milp_censors = sorted(
+        ARCHIVE_MILP_CENSORED_KEYS.difference(observed_milp_time_limit_keys),
+        key=_raw_sort_key,
+    )
+    unexpected_milp_censors = sorted(
+        observed_milp_time_limit_keys.difference(ARCHIVE_MILP_CENSORED_KEYS),
+        key=_raw_sort_key,
+    )
+    if missing_milp_censors or unexpected_milp_censors:
+        errors.append(
+            "archive MILP censor manifest mismatch: "
+            f"missing={missing_milp_censors[:5]}, "
+            f"unexpected={unexpected_milp_censors[:5]}"
+        )
+
     expected_jobs = set(ARCHIVE_PAPER_JOBS.values())
     for label, observed_jobs in (
         ("cmd", command_jobs),
@@ -1443,7 +2092,12 @@ def requires_raw_archive_comparison(
     rows: Sequence[Mapping[str, object]],
     metadata: Sequence[Mapping[str, object]] = (),
 ) -> bool:
-    """Apply raw references to full mode and 50-job full-grid parse inputs."""
+    """Identify runs to which the raw archive comparison applies.
+
+    Full mode can execute without the optional archive; main converts this
+    applicability result into a non-fatal, machine-readable skip in that case.
+    A complete-grid parse continues to require the archive comparison.
+    """
 
     if mode == "full":
         return True
@@ -1475,7 +2129,10 @@ def provenance_inputs(
             inputs.append(args.archive)
         return inputs
     if args.mode == "full":
-        return [JULIA_RUNNER, args.archive]
+        inputs = [JULIA_RUNNER]
+        if raw_reference_required:
+            inputs.append(args.archive)
+        return inputs
     return [JULIA_RUNNER]
 
 
@@ -1529,6 +2186,184 @@ def summarize(rows: Sequence[Mapping[str, object]]) -> list[dict[str, object]]:
             }
         )
     return summaries
+
+
+def evaluate_conclusion_consistency(
+    summaries: Sequence[Mapping[str, object]], mode: str
+) -> tuple[dict[str, object], list[str]]:
+    """Check the qualitative Figure 11 conclusions on a complete fresh grid.
+
+    Archived mode records the same checks without enforcing them.  This is
+    intentional: the published archive itself has an N=400 timing exception,
+    and wall-clock crossover behavior is machine dependent.  Full mode and a
+    complete-grid parse enforce the robust iteration and eventual-scalability
+    conclusions.
+    """
+
+    observed = {
+        (int(row["nodes"]), str(row["method"])): row for row in summaries
+    }
+    expected_keys = {
+        (nodes, method) for nodes in PAPER_NODES for method in METHODS
+    }
+    missing_groups = sorted(
+        expected_keys.difference(observed),
+        key=lambda key: (key[0], METHODS.index(key[1])),
+    )
+    wrong_run_counts = [
+        {
+            "nodes": nodes,
+            "method": method,
+            "observed": int(observed[(nodes, method)]["n_runs"]),
+            "expected": len(PAPER_SEEDS),
+        }
+        for nodes, method in sorted(
+            expected_keys.intersection(observed),
+            key=lambda key: (key[0], METHODS.index(key[1])),
+        )
+        if int(observed[(nodes, method)]["n_runs"]) != len(PAPER_SEEDS)
+    ]
+    complete_paper_grid = not missing_groups and not wrong_run_counts
+    enforce = complete_paper_grid and mode in {"full", "parse"}
+    checks: list[dict[str, object]] = []
+    errors: list[str] = []
+
+    def add_check(
+        *,
+        check_id: str,
+        nodes: int,
+        category: str,
+        metric: str,
+        left_method: str,
+        right_method: str,
+        informational: bool = False,
+    ) -> None:
+        left_value = float(observed[(nodes, left_method)][metric])
+        right_value = float(observed[(nodes, right_method)][metric])
+        passed = left_value < right_value
+        enforced = enforce and not informational
+        checks.append(
+            {
+                "id": check_id,
+                "nodes": nodes,
+                "category": category,
+                "metric": metric,
+                "left_method": left_method,
+                "left_value": left_value,
+                "relation": "<",
+                "right_method": right_method,
+                "right_value": right_value,
+                "passed": passed,
+                "enforced": enforced,
+                "informational": informational,
+            }
+        )
+        if enforced and not passed:
+            errors.append(
+                "Section 3.2 conclusion mismatch at "
+                f"nodes={nodes}: expected {left_method} {metric} "
+                f"({left_value}) < {right_method} {metric} ({right_value})"
+            )
+
+    if complete_paper_grid:
+        for nodes in PAPER_NODES:
+            for method in ("bfs", "milp"):
+                add_check(
+                    check_id=f"basic_iterations_less_than_{method}",
+                    nodes=nodes,
+                    category="iteration_pattern",
+                    metric="iterations_mean",
+                    left_method="basic",
+                    right_method=method,
+                )
+            add_check(
+                check_id="milp_iterations_less_than_bfs",
+                nodes=nodes,
+                category="iteration_pattern",
+                metric="iterations_mean",
+                left_method="milp",
+                right_method="bfs",
+            )
+
+        for nodes in PAPER_NODES[1:]:
+            for method in ("bfs", "milp"):
+                add_check(
+                    check_id=f"{method}_total_time_less_than_basic",
+                    nodes=nodes,
+                    category="scalability_pattern",
+                    metric="total_time_mean",
+                    left_method=method,
+                    right_method="basic",
+                    informational=nodes not in PAPER_NODES[-2:],
+                )
+
+        for nodes in PAPER_NODES[-2:]:
+            add_check(
+                check_id="milp_total_time_less_than_bfs",
+                nodes=nodes,
+                category="timing_crossover",
+                metric="total_time_mean",
+                left_method="milp",
+                right_method="bfs",
+                informational=True,
+            )
+
+    enforced_checks = [check for check in checks if bool(check["enforced"])]
+    informational_checks = [
+        check for check in checks if bool(check["informational"])
+    ]
+    required_pattern_checks = [
+        check for check in checks if not bool(check["informational"])
+    ]
+    enforced_failed = sum(not bool(check["passed"]) for check in enforced_checks)
+    required_pattern_failed = sum(
+        not bool(check["passed"]) for check in required_pattern_checks
+    )
+    return (
+        {
+            "mode": mode,
+            "complete_paper_grid": complete_paper_grid,
+            "missing_groups": [
+                {"nodes": nodes, "method": method}
+                for nodes, method in missing_groups
+            ],
+            "wrong_run_counts": wrong_run_counts,
+            "enforced_for_this_mode": enforce,
+            "enforcement_policy": (
+                "Enforce robust Figure 11 iteration patterns and the eventual "
+                "N=500/N=600 reformulation-versus-Basic scalability pattern "
+                "for fresh full grids and complete-grid parse mode. N=300/N=400 "
+                "timing comparisons and archived reconstruction are recorded "
+                "informationally."
+            ),
+            "aggregation_scope": (
+                "Arithmetic means over all 10 paper rows per method, preserving "
+                "the existing ADMM and MILP censor policy."
+            ),
+            "timing_crossover_policy": (
+                "MILP total time below BFS at N=500 and N=600 is recorded but "
+                "never enforced because wall time is machine dependent."
+            ),
+            "checks": checks,
+            "summary": {
+                "check_count": len(checks),
+                "enforced_count": len(enforced_checks),
+                "enforced_passed": len(enforced_checks) - enforced_failed,
+                "enforced_failed": enforced_failed,
+                "all_enforced_checks_passed": enforced_failed == 0,
+                "required_pattern_count": len(required_pattern_checks),
+                "required_pattern_passed": (
+                    len(required_pattern_checks) - required_pattern_failed
+                ),
+                "required_pattern_failed": required_pattern_failed,
+                "informational_count": len(informational_checks),
+                "informational_passed": sum(
+                    bool(check["passed"]) for check in informational_checks
+                ),
+            },
+        },
+        errors,
+    )
 
 
 def compare_reference(
@@ -1676,19 +2511,35 @@ def compare_reference(
                     f"expected {reference['termination_status']}, got {observed_status}"
                 )
 
+    conclusion_consistency, conclusion_errors = evaluate_conclusion_consistency(
+        summaries, mode
+    )
+    errors.extend(conclusion_errors)
     report = {
         "reference_source": (
             "experiments_logs/3-2-networkflow/admm_summary/admm_folder_summary.csv"
         ),
         "mode": mode,
-        "timing_policy": "informational only; wall time is hardware and environment dependent",
+        "timing_policy": (
+            "Absolute wall-clock values and the MILP-vs-BFS large-N crossover "
+            "are informational. Complete fresh grids enforce only the paper's "
+            "eventual relative scalability pattern: BFS and MILP mean total "
+            "time below Basic at N=500 and N=600. The corresponding N=300 and "
+            "N=400 comparisons are recorded informationally."
+        ),
         "iteration_policy": (
             "exact archived aggregate check"
             if mode == "archived"
-            else "exact raw seed-1 check in smoke; aggregate values otherwise informational because the full archive contains a hardware-censored time-limit run"
+            else (
+                "exact raw seed-1 check in smoke; complete fresh grids enforce "
+                "qualitative mean-iteration ordering, while exact aggregate "
+                "values remain informational because the full archive contains "
+                "ADMM- and MILP-cutoff-censored rows"
+            )
         ),
         "missing_reference_groups": missing_groups,
         "complete_reference_grid": not missing_groups,
+        "conclusion_consistency": conclusion_consistency,
         "rows": comparison_rows,
         "smoke_reference": {
             "source": (
@@ -1860,7 +2711,8 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "Reproduce Section 3.2 / Figure 11 from archived logs, existing logs, "
             "or a fresh network-flow sweep."
-        )
+        ),
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     add_common_arguments(
         parser,
@@ -1886,6 +2738,8 @@ def _job_result_payload(results) -> list[dict[str, object]]:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     validate_common_arguments(args)
+    archive_path = args.archive.expanduser()
+    archive_available = archive_path.exists()
     preflight_archive_rows: list[dict[str, object]] | None = None
     if args.mode == "full":
         if args.threads != PAPER_THREADS:
@@ -1893,12 +2747,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"Section 3.2 full mode requires --threads {PAPER_THREADS} "
                 "to match the paper experiment."
             )
-        try:
-            preflight_archive_rows = load_validated_archive_runs(args.archive)
-        except (OSError, ValueError) as error:
-            raise SystemExit(
-                f"Full mode requires a valid experiments_logs.zip raw reference: {error}"
-            ) from error
+        if archive_available:
+            try:
+                preflight_archive_rows = load_validated_archive_runs(args.archive)
+            except (OSError, ValueError) as error:
+                raise SystemExit(
+                    "When the optional full-mode archive exists, it must be a "
+                    f"valid experiments_logs.zip raw reference: {error}"
+                ) from error
     output = prepare_mode_output(args.output, args.mode)
     jobs: list[Job] = []
     results = []
@@ -1943,9 +2799,15 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     comparison, comparison_errors = compare_reference(summaries, args.mode, rows)
     errors.extend(comparison_errors)
-    raw_reference_required = requires_raw_archive_comparison(
+    raw_reference_applicable = requires_raw_archive_comparison(
         args.mode, rows, metadata
     )
+    optional_archive_skip = (
+        args.mode == "full"
+        and raw_reference_applicable
+        and not archive_available
+    )
+    raw_reference_required = raw_reference_applicable and not optional_archive_skip
     raw_reference_errors: list[str] = []
     raw_reference_report: dict[str, object]
     if raw_reference_required:
@@ -1956,7 +2818,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 else load_validated_archive_runs(args.archive)
             )
             raw_reference_report = build_raw_archive_comparison(rows, archive_rows)
+            raw_reference_report["status"] = "applied"
             raw_reference_report["applied"] = True
+            raw_reference_report["required"] = True
+            raw_reference_report["archive_available"] = True
             raw_reference_report["archive_path"] = str(
                 args.archive.expanduser().resolve()
             )
@@ -1964,23 +2829,54 @@ def main(argv: Sequence[str] | None = None) -> int:
             raw_reference_report["validation_errors"] = list(raw_reference_errors)
             errors.extend(raw_reference_errors)
             comparison["iteration_policy"] = (
-                "exact raw archive iteration/status check on 149 stable rows; "
-                "nodes=500/seed=6/basic is time-limit-censored and informational"
+                "exact raw archive iteration/status check on 115 stable rows; "
+                "34 feasible-incumbent MILP partition-limit rows and "
+                "nodes=500/seed=6/basic are explicitly censored; qualitative "
+                "mean-iteration ordering is enforced over all ten-row "
+                "arithmetic means"
             )
         except (OSError, ValueError) as error:
             message = f"could not load Section 3.2 raw archive reference: {error}"
             errors.append(message)
             raw_reference_errors.append(message)
             raw_reference_report = {
+                "status": "error",
                 "applied": False,
+                "required": True,
+                "archive_available": archive_available,
                 "reference": f"experiments_logs.zip/{ARCHIVE_RUNS_MEMBER}",
                 "archive_path": str(args.archive.expanduser().resolve()),
                 "load_error": str(error),
                 "validation_errors": [message],
             }
+    elif optional_archive_skip:
+        reason = (
+            "Section 3.2 full mode used the embedded 50-job paper grid and "
+            "paper settings without an archive-backed raw comparison because "
+            f"the archive path does not exist: {archive_path.resolve()}"
+        )
+        warnings.append(reason)
+        raw_reference_report = {
+            "status": "skipped",
+            "applied": False,
+            "required": False,
+            "archive_available": False,
+            "reference": f"experiments_logs.zip/{ARCHIVE_RUNS_MEMBER}",
+            "archive_path": str(archive_path.resolve()),
+            "reason_code": ARCHIVE_OPTIONAL_SKIP_REASON,
+            "reason": reason,
+            "validation_errors": [],
+        }
+        comparison["iteration_policy"] = (
+            "archive comparison skipped because the optional archive was absent; "
+            "the embedded paper seed/configuration grid and qualitative paper "
+            "conclusions remain enforced"
+        )
     else:
         raw_reference_report = {
+            "status": "not_applicable",
             "applied": False,
+            "required": False,
             "reference": f"experiments_logs.zip/{ARCHIVE_RUNS_MEMBER}",
             "reason": (
                 "raw comparison applies only to full mode or parse mode containing "
@@ -1988,15 +2884,24 @@ def main(argv: Sequence[str] | None = None) -> int:
             ),
             "validation_errors": [],
         }
-    if raw_reference_required:
+    if raw_reference_applicable:
         write_json(output / "raw_archive_comparison.json", raw_reference_report)
     comparison["paper_settings_validation"] = grid_report["paper_settings"]
     comparison["raw_archive_comparison"] = raw_reference_report
     write_json(output / "reference_comparison.json", comparison)
 
+    grid_report["conclusion_consistency"] = comparison[
+        "conclusion_consistency"
+    ]
     grid_report["raw_archive_reference"] = {
+        "applicable": raw_reference_applicable,
         "required": raw_reference_required,
         "applied": bool(raw_reference_report.get("applied")),
+        "status": raw_reference_report.get("status"),
+        "archive_available": raw_reference_report.get("archive_available"),
+        "archive_path": raw_reference_report.get("archive_path"),
+        "reason_code": raw_reference_report.get("reason_code"),
+        "reason": raw_reference_report.get("reason"),
         "reference": raw_reference_report.get("reference"),
         "summary": raw_reference_report.get("summary"),
         "error_count": len(raw_reference_errors),
@@ -2016,21 +2921,29 @@ def main(argv: Sequence[str] | None = None) -> int:
     write_json(output / "validation.json", grid_report)
 
     inputs = provenance_inputs(args, raw_reference_required)
+    provenance_notes = [
+        "Full mode is the exact 50-job paper sweep: nodes 200:100:600, 2000 arcs, seeds 1:10.",
+        "Each job runs Basic, BFS, and MILP in that order on one shared generated instance.",
+        "Paper settings: original ADMM, rho=1, maxIter=100000, LInf tolerances 1e-4, and a 3600-second per-method limit.",
+        "Figure total time is partition time plus ADMM iteration-loop time; initialization is reported but excluded.",
+        "The archive contains one Basic time-limit result at nodes=500, seed=6, and includes it in the mean.",
+        "The archive contains 34 feasible HiGHS MILP partitions stopped at their 60-second limit; their partition-solver state and downstream ADMM outcome are cutoff-censored, while feasibility and count fingerprints remain strict.",
+        "Archived measured work totals about 15.9 hours sequentially on warm 16-thread jobs; allow roughly 16 hours plus setup on comparable hardware.",
+        "Wall-clock comparisons are informational. Julia/package versions and hardware can materially change timing.",
+    ]
+    if optional_archive_skip:
+        provenance_notes.append(
+            f"{ARCHIVE_OPTIONAL_SKIP_REASON}: full mode proceeded from the "
+            "embedded paper seed/configuration grid; no archive content "
+            f"contributed because {archive_path.resolve()} was absent."
+        )
     write_provenance(
         output,
         section="3.2 Linear Program: The Network Flow Problem / Figure 11",
         args=args,
         jobs=jobs,
         inputs=inputs,
-        notes=(
-            "Full mode is the exact 50-job paper sweep: nodes 200:100:600, 2000 arcs, seeds 1:10.",
-            "Each job runs Basic, BFS, and MILP in that order on one shared generated instance.",
-            "Paper settings: original ADMM, rho=1, maxIter=100000, LInf tolerances 1e-4, and a 3600-second per-method limit.",
-            "Figure total time is partition time plus ADMM iteration-loop time; initialization is reported but excluded.",
-            "The archive contains one Basic time-limit result at nodes=500, seed=6, and includes it in the mean.",
-            "Archived measured work totals about 15.9 hours sequentially on warm 16-thread jobs; allow roughly 16 hours plus setup on comparable hardware.",
-            "Wall-clock comparisons are informational. Julia/package versions and hardware can materially change timing.",
-        ),
+        notes=provenance_notes,
     )
 
     print(f"Wrote {output / 'runs.csv'} ({len(rows)} method rows)")

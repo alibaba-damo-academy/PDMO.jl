@@ -103,7 +103,7 @@ function run_and_record!(
 end
 
 function main(args)
-    length(args) >= 8 || usage_error()
+    length(args) in 8:11 || usage_error()
 
     number_nodes = parse(Int, args[1])
     n = parse(Int, args[2])
@@ -121,8 +121,10 @@ function main(args)
     number_nodes > 1 || error("N must exceed one.")
     n > 0 || error("n must be positive.")
     m > 0 || error("m must be positive.")
+    initial_rho > 0 || error("initialRho must be positive.")
     max_iter > 0 || error("maxIter must be positive.")
     log_interval > 0 || error("logInterval must be positive.")
+    0.0 <= mip_heuristic_effort <= 1.0 || error("mipHeuristicEffort must lie in [0, 1].")
     mip_time_limit > 0 || error("mipTimeLimit must be positive.")
     make_solver(solver_name) # Validate before generating the large instance.
 

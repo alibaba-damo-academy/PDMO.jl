@@ -1,9 +1,18 @@
+import contextlib
 import hashlib
+import io
 import re
 import unittest
 from pathlib import Path
 
-from reproduction import section_3_3
+from reproduction import (
+    appendix_a,
+    section_1,
+    section_3_1,
+    section_3_2,
+    section_3_3,
+    section_3_4,
+)
 from reproduction.common import DEFAULT_ENLIGHT_HARD_MPS, DEFAULT_MATPOWER_DIR
 from reproduction.section_3_1_impl import (
     build_parser as build_section_3_1_parser,
@@ -40,6 +49,50 @@ class ReproductionPackagingTests(unittest.TestCase):
             "experiments_logs.zip",
         ):
             self.assertIn(dependency, text)
+
+    def test_guide_makes_archive_optional_for_fresh_full_runs(self):
+        text = (REPRODUCTION_ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertIn(
+            "Fresh `smoke` and `full` runs do not require `experiments_logs.zip`",
+            text,
+        )
+        self.assertIn("optional row comparison as skipped", text)
+        self.assertNotIn(
+            "Full mode requires `experiments_logs.zip`",
+            text,
+        )
+
+    def test_all_public_entry_points_dispatch_to_current_help(self):
+        expected_modes = (
+            (section_1, ("archived", "parse", "smoke", "full")),
+            (
+                section_3_1,
+                ("archived", "parse", "smoke", "full", "reported"),
+            ),
+            (section_3_2, ("archived", "parse", "smoke", "full")),
+            (section_3_3, ("archived", "parse", "smoke", "full")),
+            (section_3_4, ("archived", "parse", "smoke", "full")),
+            (appendix_a, ("table", "parse", "archived-source", "full")),
+        )
+        for module, modes in expected_modes:
+            with self.subTest(module=module.__name__):
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    with self.assertRaises(SystemExit) as caught:
+                        module.main(("--help",))
+                self.assertEqual(caught.exception.code, 0)
+                help_text = output.getvalue()
+                self.assertIn("usage:", help_text)
+                for mode in modes:
+                    self.assertIn(mode, help_text)
+
+    def test_section_3_4_julia_driver_rejects_loose_arguments(self):
+        text = (REPRODUCTION_ROOT / "julia" / "section_3_4.jl").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("length(args) in 8:11 || usage_error()", text)
+        self.assertIn("initialRho must be positive", text)
+        self.assertIn("mipHeuristicEffort must lie in [0, 1]", text)
 
     def test_tested_julia_lock_snapshots_are_portable(self):
         snapshots = {
