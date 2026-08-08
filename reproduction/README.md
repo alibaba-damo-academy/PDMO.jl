@@ -1,15 +1,14 @@
 # Reviewer reproduction guide
 
-This directory provides reviewer-facing entry points for every numerical or
-tabular result in *Automating Reformulation for Parallel ADMM*
+This directory provides reviewer-facing entry points for the numerical
+experiments in *Automating Reformulation for Parallel ADMM*
 (arXiv:2603.19417) without modifying `src/`, `applications/`, or `advanced/`.
-It distinguishes fresh reruns from regeneration using retained logs, and it
-does not label a copied paper image as a rerun. Raw logs, machine-readable
-results, figures, validation reports, and provenance are written below the path
-given by `--output`, in a mode-specific subdirectory (for example,
-`reproduction/output/section_3_2/archived/`).
+It distinguishes fresh reruns from regeneration using retained logs. Raw logs,
+machine-readable results, figures, validation reports, and provenance are
+written below the path given by `--output`, in a mode-specific subdirectory
+such as `reproduction/output/section_3_2/archived/`.
 
-## Complete paper artifact map
+## Numerical experiment artifact map
 
 | Paper artifact | Reviewer entry point | What can be reproduced |
 |---|---|---|
@@ -20,36 +19,21 @@ given by `--output`, in a mode-specific subdirectory (for example,
 | Figure 13 | `section_3_3.py` | Exact reported aggregates from `archived`, or the complete fresh OPF grid with `full` |
 | Figure 14 | `section_3_3.py` | Published `rho=2000` profile from `archived`, or an exact fresh rerun of that same selected profile with `full`; the caption's `rho=1000` is retained as typo metadata only |
 | Table 1 and Figures 15--16 | `section_3_4.py` | Validated reconstruction from retained logs with a documented 0.01-second Table 1 display discrepancy, or the complete fresh consensus grid with `full` |
-| Table 2 | `appendix_a.py` | Deterministic CSV, Markdown, and LaTeX export with `table` |
-| Figure 18 | `appendix_a.py` | Byte-verified reported raster with `archived-source`, or a validated plot from the original history with `parse` |
 
-Figures 1, 3--6, 12, and 17 are explanatory illustrations rather than
-numerical results. They are defined by inline TikZ/circuitikz or the included
-`plots/GNN_Structure.pdf` in the public arXiv source; the source-build command is
-given below.
-
-One source limitation is material: neither this repository nor the internal
-experiment repository contains the final Figure 18 training program, the
-10,400-graph corpus, its exact split/seeds, or the epoch-by-epoch accuracy
-history. The committed `.pth` file is a final inference state dictionary and
-cannot reconstruct earlier accuracies. Consequently, `appendix_a.py --mode
-full` fails with a machine-readable inventory of the missing assets rather than
-fabricating a curve. Recovering either the original training project and data,
-or the original accuracy-history CSV, is required to turn that row into a fresh
-retraining result.
-
-Accordingly, every submitted figure and table has a reviewer command for a
-fresh rerun, deterministic export, retained-data reconstruction, or verified
-source build. Figure 18 is the sole artifact without a genuine fresh numerical
-rerun; its exact submitted raster remains reproducible as source preservation.
+This guide intentionally focuses on raw experiment data and the numerical
+tables and plots derived from it.
 
 ## Prerequisites and dependency initialization
 
-Run every command in this guide from the repository root on Linux or another
-POSIX-like system. The reviewer wrappers require Python 3.10 or newer (tested
-with Python 3.12.4). `requirements.txt` installs Matplotlib for plots and Pillow
-for decoded-image validation; all other wrapper imports use the Python standard
-library. Initialize the isolated environment with:
+Unless a command block explicitly says otherwise, run commands in this guide
+from the repository root on Linux or another POSIX-like system. The only
+working-directory exception is the Julia warmup block: those two commands must
+be launched from the parent of a checkout named exactly `PDMO.jl`, after which
+the block returns to the repository root. The reviewer wrappers require
+Python 3.10 or newer (tested with Python 3.12.4). `requirements.txt` installs
+Matplotlib for plots and Pillow for decoded-image validation; all other wrapper
+imports use the Python standard library. Initialize the isolated environment
+with:
 
 ```bash
 python3 -m venv reproduction/.venv-reproduction
@@ -58,14 +42,20 @@ python3 -m pip install --upgrade pip
 python3 -m pip install -r reproduction/requirements.txt
 ```
 
-Fresh `smoke` and `full` runs do not require `experiments_logs.zip`: all paper
-seeds, grids, solver settings, and reference conclusions are pinned in the
-reviewer scripts. The `archived` modes require the ZIP at the repository root
-unless `--archive PATH` is supplied. Sections 3.2--3.4 `full` mode will also use
-it automatically, when present, for an additional strict row-by-row comparison;
-when absent, that optional comparison is recorded as skipped and the fresh
-validation remains active. A source-only reviewer distribution may therefore
-omit the retained logs. Verify the ZIP before an archived or comparison run:
+Fresh `smoke` and `full` runs do not require `experiments_logs.zip`. The
+archive is not included in the public source-only checkout. Because Sections
+3.1--3.4 default to `archived`, select the fresh modes explicitly: use
+`full` for Figure 2 and Sections 3.2--3.4, and use Section 3.1 `reported` for
+the submitted Figures 7--10. Do not use `archived` unless the ZIP has been
+supplied separately.
+
+All paper seeds, grids, solver settings, and reference conclusions needed by
+those fresh modes are pinned in the reviewer scripts. The `archived` modes
+require the ZIP at the repository root unless `--archive PATH` is supplied.
+Sections 3.2--3.4 `full` mode will also use it automatically, when present, for
+an additional strict row-by-row comparison; when absent, that optional
+comparison is recorded as skipped and the fresh validation remains active.
+Verify a separately supplied ZIP before an archived or comparison run:
 
 ```bash
 echo "3a1a5e7a5e9f1c2996426b5cf41ae7b7672f5f9dd03fbbf166a322487f083138  experiments_logs.zip" \
@@ -95,41 +85,29 @@ or licensed HSL installation is required: the warmups use the bundled
 `HSL_jll_placeholder` and Ipopt's default linear solver. HSL remains an optional
 performance enhancement.
 
-Initial dependency setup and public arXiv-source retrieval require network
-access plus `git`, `curl`, `tar`, and GNU `sha256sum` (use `shasum -a 256` instead on macOS and
-compare the printed digest). Fresh GNN methods additionally require a separate
-Python 3.9--3.11 interpreter with the pinned packages configured below; the
-experiment drivers force CPU inference, so CUDA and a GPU are not required. Only
-the explanatory-figure paper build requires TeX: use TeX Live 2025 with
-`pdflatex`, BibTeX, and the packages loaded by `main.tex`; a full TeX Live
-installation is the simplest option. TeX is not required for the numerical
-CSVs, tables, or plots.
+Initial dependency setup requires network access. The checksum commands use GNU
+`sha256sum` (use `shasum -a 256` instead on macOS and compare the printed
+digest). Fresh GNN methods additionally require a separate Python 3.9--3.11
+interpreter with the pinned packages configured below; the experiment drivers
+force CPU inference, so CUDA and a GPU are not required.
 
-## Fastest review path: rebuild from the supplied archive
+## Optional fastest review path: rebuild from a separately supplied archive
 
-After the initialization above, regenerate every retained numerical result:
+If `experiments_logs.zip` has been supplied separately and passes the checksum
+above, regenerate every retained numerical result without launching Julia:
 
 ```bash
 python3 reproduction/section_3_1.py --mode archived
 python3 reproduction/section_3_2.py --mode archived
 python3 reproduction/section_3_3.py --mode archived
 python3 reproduction/section_3_4.py --mode archived
-
-curl -L --fail https://arxiv.org/e-print/2603.19417v1 \
-  -o /tmp/pdmo-paper-source.tar.gz
-echo "f370667d2f464fea5f00df1f22682bd390fdead70c19cda97929b6b7a1dcf107  /tmp/pdmo-paper-source.tar.gz" \
-  | sha256sum --check -
-python3 reproduction/appendix_a.py --mode archived-source \
-  --arxiv-source /tmp/pdmo-paper-source.tar.gz
 ```
 
 These commands parse `experiments_logs.zip`, validate the expected experiment
 grids, rebuild the retained non-paper Section 3.1 comparison, Figure 11,
-Figures 13--16, and Table 1, preserve the
-reported Figure 18 raster, and write provenance. Override the log archive with
-`--archive PATH`. These modes perform no Julia solve and do not require MIPLIB,
-MATPOWER, or the GNN Python environment. The Figure 18 source copy must have
-SHA256 `b93e66ce848b2801e567da74e63edc265e448d18217ef2cf63fea546775dc476`.
+Figures 13--16, and Table 1, and write provenance. Override the log archive
+with `--archive PATH`. These modes perform no Julia solve and do not require
+MIPLIB, MATPOWER, or the GNN Python environment.
 
 Figure 2 is absent from the supplied archive and is inexpensive to regenerate:
 
@@ -138,8 +116,7 @@ python3 reproduction/section_1.py --mode full
 ```
 
 Figures 7--10 use the bundled MIPLIB input with the Section 3.1 `reported`
-command shown below. Figure 18 fresh retraining has the explicit source gap
-described in the artifact map.
+command shown below.
 
 ## Common modes
 
@@ -157,10 +134,7 @@ The five main-section entry points use the following modes where applicable:
   validate, and plot it. For Section 3.1 this is the manuscript-literal
   diagnostic profile; use `reported` for the submitted Figures 7--10.
 
-Figure 2 has no `archived` input and rejects that mode. Appendix A instead uses
-`table`, `parse --accuracy-csv FILE`, `archived-source --arxiv-source FILE`, and
-`full`; its `full` mode is deliberately a failing asset audit until the original
-training inputs are recovered.
+Figure 2 has no `archived` input and rejects that mode.
 
 The `--output` value is a base directory. Each command writes to
 `--output/<mode>/`, so a smoke run cannot replace archived or full-grid
@@ -677,75 +651,6 @@ reached the fixed 60-second cutoff. Its fresh mean iteration count was still
 40.9% below Basic, so the crossover is retained as an informational timing
 exception rather than hidden or treated as a convergence contradiction.
 
-### Appendix A: Table 2 and Figure 18
-
-Export Table 2 without Julia or GNN dependencies:
-
-```bash
-python3 reproduction/appendix_a.py --mode table
-```
-
-Preserve and byte-verify the reported Figure 18 raster from the public paper
-source:
-
-```bash
-curl -L --fail https://arxiv.org/e-print/2603.19417v1 \
-  -o /tmp/pdmo-paper-source.tar.gz
-echo "f370667d2f464fea5f00df1f22682bd390fdead70c19cda97929b6b7a1dcf107  /tmp/pdmo-paper-source.tar.gz" \
-  | sha256sum --check -
-python3 reproduction/appendix_a.py --mode archived-source \
-  --arxiv-source /tmp/pdmo-paper-source.tar.gz
-```
-
-The command accepts only the verified arXiv v1 raster by default. Its expected
-SHA256 is `b93e66ce848b2801e567da74e63edc265e448d18217ef2cf63fea546775dc476`; it
-labels the copied image `reported-source-only`, not a numerical rerun.
-
-If the original epoch/test-accuracy history is recovered, supply a CSV with
-`epoch,accuracy` columns (accuracy fractions are the default):
-
-```bash
-python3 reproduction/appendix_a.py --mode parse \
-  --accuracy-csv /path/to/original_accuracy_history.csv --accuracy-scale fraction
-```
-
-Parse mode validates the history and renders Figure 18 as PNG/PDF, but it still
-does not rerun training.
-
-To audit the missing inputs for a genuine fresh retraining:
-
-```bash
-python3 reproduction/appendix_a.py --mode full
-```
-
-This command is expected to exit nonzero while writing a machine-readable
-failed validation and complete missing-assets inventory. It can become a true
-training entry point only after the original project, data, split, and seeds
-are recovered.
-
-### Static explanatory figures
-
-The public arXiv source contains the inline source for Figures 1, 3--6, and 12,
-and the included PDF for Figure 17. Build the submitted paper with:
-
-```bash
-curl -L --fail https://arxiv.org/e-print/2603.19417v1 \
-  -o /tmp/pdmo-paper-source.tar.gz
-echo "f370667d2f464fea5f00df1f22682bd390fdead70c19cda97929b6b7a1dcf107  /tmp/pdmo-paper-source.tar.gz" \
-  | sha256sum --check -
-mkdir -p /tmp/pdmo-paper-source
-tar -xzf /tmp/pdmo-paper-source.tar.gz -C /tmp/pdmo-paper-source
-cd /tmp/pdmo-paper-source
-pdflatex main.tex
-bibtex main
-pdflatex main.tex
-pdflatex main.tex
-```
-
-The archive metadata specifies TeX Live 2025 and `pdflatex`; the bibliography step also requires BibTeX. This build renders
-the explanatory figures in their paper context; it does not convert them into
-numerical experiment outputs.
-
 ## Measured runtime expectations
 
 Archive-based estimates sum partition plus ADMM times on the original 16-thread
@@ -817,14 +722,11 @@ Each mode-specific output directory contains, as applicable:
   the plots; Section 3.3 `aggregates.csv` and Section 3.4 `aggregate.csv` also
   retain their within-panel normalized columns;
 - `table_1.csv`, `table_1.md`, and `table_1.tex` for Section 3.4;
-- `table_2.csv`, `table_2.md`, and `table_2.tex` for Appendix A;
-- `figure_18_accuracy.csv` for a supplied original history, or
-  `archived_source_manifest.json` for a source-only Figure 18 copy;
-- `figures/`: generated composites and individual/source panels in PNG and PDF
-  where applicable;
+- `figures/`: generated composites and individual panels in PNG and PDF where
+  applicable;
 - `validation.json`: strict grid, terminal-state, and structured-artifact checks;
-- `reference_comparison.json` or Appendix `reference.json`: paper-reference and
-  conclusion checks, or an explicit note when no numeric reference exists;
+- `reference_comparison.json`: paper-reference and conclusion checks, or an
+  explicit note when no numeric reference exists;
 - `raw_archive_comparison.json`: Sections 3.2 and 3.4 full-grid, field-aware
   comparisons with exact, bounded-variance, censored, and hardware-informational
   checks separated when an archive is supplied, or an explicit `skipped` record

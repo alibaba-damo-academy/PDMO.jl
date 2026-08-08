@@ -9,9 +9,9 @@ by Sun et al. (2026).
 Reviewers should use the self-contained
 **[reproduction guide](reproduction/README.md)**. It is the authoritative source
 for environment setup, input data, paper seeds, archived and fresh execution,
-validation, expected runtimes, and generated artifacts. The wrappers there
-cover every retained reconstruction and every available fresh experiment grid;
-the guide explicitly identifies the unavailable Figure 18 GNN-training assets.
+validation, expected runtimes, and generated artifacts. The wrappers cover
+retained-data reconstruction and fresh execution for every numerical experiment
+grid in scope.
 The required MIPLIB and MATPOWER problem instances are bundled under
 `reproduction/instances/` and selected automatically by the fresh-run wrappers.
 The lower-level Julia drivers are implementation details and should not be
@@ -24,9 +24,8 @@ python3 -m pip install -r reproduction/requirements.txt
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s reproduction/tests -v
 ```
 
-See the reproduction guide for the one-command entry point for each paper
-section and for the distinction between numerical results and explanatory
-illustrations.
+See the reproduction guide for the one-command entry point for each numerical
+experiment section.
 
 # PDMO.jl - **Primal-Dual Methods for Optimization**
 
@@ -259,4 +258,4 @@ For comprehensive documentation, examples, and API references, visit our [full d
 
 ## License
 
-`PDMO.jl` is licensed under the MIT License. 
+`PDMO.jl` is licensed under the MIT License.
